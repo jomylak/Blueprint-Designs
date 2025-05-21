@@ -1,7 +1,7 @@
 
 import { useProject } from "@/context/ProjectContext";
 import { Button } from "@/components/ui/button";
-import { FileIcon, FolderIcon } from "lucide-react";
+import { FileIcon, FolderIcon, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 const Header = () => {
@@ -32,13 +32,13 @@ const Header = () => {
 
         <div className="flex gap-2">
           <Button 
-            variant="outline" 
+            variant="default" 
             size="sm"
             onClick={() => document.getElementById('pdf-upload')?.click()}
             className="flex items-center gap-1"
           >
-            <FileIcon className="h-4 w-4" />
-            <span>Upload Blueprint</span>
+            <Upload className="h-4 w-4" />
+            <span>Add Blueprint</span>
           </Button>
           <input
             id="pdf-upload"
