@@ -3,6 +3,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import BlueprintView from "@/components/BlueprintView";
 import EstimationSummary from "@/components/EstimationSummary";
 import MaterialLibrary from "@/components/MaterialLibrary";
+import SavedProjects from "@/components/SavedProjects";
 import { ProjectProvider } from "@/context/ProjectContext";
 import Header from "@/components/Header";
 import { Toaster } from "sonner";
@@ -46,10 +47,11 @@ const Index = () => {
         <Header />
         <main className="flex-1 container mx-auto py-4 px-2 md:px-6">
           <Tabs defaultValue="blueprint" className="w-full">
-            <TabsList className="grid grid-cols-3 mb-6">
+            <TabsList className="grid grid-cols-4 mb-6">
               <TabsTrigger value="blueprint">Blueprint View</TabsTrigger>
               <TabsTrigger value="estimation">Estimation Summary</TabsTrigger>
               <TabsTrigger value="materials">Material Library</TabsTrigger>
+              <TabsTrigger value="saved">Previous Projects</TabsTrigger>
             </TabsList>
             <TabsContent value="blueprint">
               <BlueprintViewWrapper />
@@ -59,6 +61,9 @@ const Index = () => {
             </TabsContent>
             <TabsContent value="materials">
               <MaterialLibrary />
+            </TabsContent>
+            <TabsContent value="saved">
+              <SavedProjects />
             </TabsContent>
           </Tabs>
         </main>

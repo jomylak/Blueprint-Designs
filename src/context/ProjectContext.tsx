@@ -1,4 +1,3 @@
-
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { toast } from "sonner";
 
@@ -132,6 +131,19 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
     ));
   }, []);
 
+  // Calculate the total cost of all regions
+  const calculateTotalCost = useCallback(() => {
+    return regions.reduce((total, region) => {
+      if (region.materialId) {
+        const material = materials.find(m => m.id === region.materialId);
+        if (material) {
+          return total + (material.pricePerSqFt * region.area);
+        }
+      }
+      return total;
+    }, 0);
+  }, [regions, materials]);
+
   const saveProject = useCallback(() => {
     try {
       const projectData = {
@@ -142,15 +154,44 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
         materials,
       };
       
-      // In a real app, we'd save to a file or localStorage
-      // For demonstration, we'll just log and show some feedback
-      console.log('Project data saved:', projectData);
-      const json = JSON.stringify(projectData);
+      // Calculate preview data for the saved projects list
+      const previewData = {
+        regionsCount: regions.length,
+        materialsCount: materials.length,
+        totalCost: calculateTotalCost()
+      };
       
       // Save to localStorage for persistence
-      localStorage.setItem('builderEstimationProject', json);
+      localStorage.setItem('builderEstimationProject', JSON.stringify(projectData));
+      
+      // Also save to our projects list
+      const projectsJson = localStorage.getItem('builderEstimationProjects');
+      let projects = projectsJson ? JSON.parse(projectsJson) : [];
+      
+      // Check if a project with this name already exists
+      const existingIndex = projects.findIndex((p: any) => p.name === projectName);
+      const projectId = existingIndex >= 0 ? projects[existingIndex].id : Date.now().toString();
+      
+      const savedProject = {
+        id: projectId,
+        name: projectName,
+        date: new Date().toLocaleDateString(),
+        previewData,
+        data: projectData
+      };
+      
+      if (existingIndex >= 0) {
+        // Update existing project
+        projects[existingIndex] = savedProject;
+      } else {
+        // Add new project
+        projects.push(savedProject);
+      }
+      
+      localStorage.setItem('builderEstimationProjects', JSON.stringify(projects));
       
       // Create a download link for the JSON file
+      const json = JSON.stringify(projectData);
       const blob = new Blob([json], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -167,7 +208,7 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
       toast.error('Failed to save project');
       return false;
     }
-  }, [projectName, scale, scaleUnit, regions, materials]);
+  }, [projectName, scale, scaleUnit, regions, materials, calculateTotalCost]);
 
   const loadProject = useCallback((data: any) => {
     try {
