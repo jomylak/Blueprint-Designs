@@ -70,19 +70,21 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
     setPdf(file);
     const url = URL.createObjectURL(file);
     setPdfUrl(url);
-    
-    // Set project name based on filename if not already set
-    if (!projectName) {
-      setProjectName(file.name.replace('.pdf', ''));
-    }
-    
-    // Reset to first page when loading a new PDF
+
+    // Reset project state when loading a new PDF
+    setProjectName(file.name.replace('.pdf', ''));
+    setRegions([]);
+    setMaterials([
+      { id: '1', name: 'Ceramic Tile', pricePerSqFt: 5.99 },
+      { id: '2', name: 'Hardwood', pricePerSqFt: 8.50 },
+      { id: '3', name: 'Carpet', pricePerSqFt: 3.75 },
+      { id: '4', name: 'Vinyl', pricePerSqFt: 2.99 },
+    ]);
+    setScale(1);
+    setScaleUnit('ft');
     setCurrentPage(1);
-    
-    // In a real app, we'd use a PDF library to get page count
-    // For this prototype, we'll just set a placeholder value
-    setPageCount(5); 
-  }, [pdfUrl, projectName]);
+    setPageCount(5); // Placeholder
+  }, [pdfUrl]);
 
   const addRegion = useCallback((region: Omit<Region, 'id' | 'name'>) => {
     setRegions(prev => {

@@ -213,7 +213,7 @@ const BlueprintView = () => {
             </>
           ) : (
             <Button
-              variant={drawingMode === DrawingMode.Drawing ? "secondary" : "outline"}
+              variant="outline"
               size="sm"
               onClick={() => setDrawingMode(DrawingMode.Drawing)}
             >
