@@ -10,6 +10,7 @@ interface Material {
 
 interface Region {
   id: string;
+  name: string;
   pageNumber: number;
   points: number[];
   materialId: string | null;
@@ -32,7 +33,7 @@ interface ProjectContextType {
   setCurrentPage: (page: number) => void;
   setScale: (scale: number) => void;
   setScaleUnit: (unit: string) => void;
-  addRegion: (region: Omit<Region, 'id'>) => void;
+  addRegion: (region: Omit<Region, 'id' | 'name'>) => void;
   updateRegion: (id: string, updates: Partial<Region>) => void;
   deleteRegion: (id: string) => void;
   addMaterial: (material: Omit<Material, 'id'>) => void;
@@ -84,8 +85,17 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
     setPageCount(5); 
   }, [pdfUrl, projectName]);
 
-  const addRegion = useCallback((region: Omit<Region, 'id'>) => {
-    setRegions(prev => [...prev, { ...region, id: Date.now().toString() }]);
+  const addRegion = useCallback((region: Omit<Region, 'id' | 'name'>) => {
+    setRegions(prev => {
+      // Generate the next sequential region number
+      const nextRegionNumber = prev.length + 1;
+      const newRegion = { 
+        ...region, 
+        id: Date.now().toString(),
+        name: `Region ${nextRegionNumber}`
+      };
+      return [...prev, newRegion];
+    });
   }, []);
 
   const updateRegion = useCallback((id: string, updates: Partial<Region>) => {
@@ -95,7 +105,13 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
   }, []);
 
   const deleteRegion = useCallback((id: string) => {
-    setRegions(prev => prev.filter(region => region.id !== id));
+    setRegions(prev => {
+      // Remove the region
+      const newRegions = prev.filter(region => region.id !== id);
+      
+      // Don't renumber existing regions to avoid confusion
+      return newRegions;
+    });
   }, []);
 
   const addMaterial = useCallback((material: Omit<Material, 'id'>) => {
@@ -158,7 +174,16 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
       setProjectName(data.name || 'Imported Project');
       setScale(data.scale || 1);
       setScaleUnit(data.scaleUnit || 'ft');
-      setRegions(data.regions || []);
+      
+      // Ensure all regions have name property
+      const updatedRegions = (data.regions || []).map((region: Region, index: number) => {
+        if (!region.name) {
+          return { ...region, name: `Region ${index + 1}` };
+        }
+        return region;
+      });
+      
+      setRegions(updatedRegions);
       setMaterials(data.materials || []);
       toast.success('Project loaded successfully');
       return true;

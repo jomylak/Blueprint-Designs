@@ -8,7 +8,9 @@ import {
   SelectTrigger, 
   SelectValue 
 } from "@/components/ui/select";
-import { TrashIcon } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Pencil, TrashIcon } from "lucide-react";
+import { useState } from "react";
 
 interface RegionsListProps {
   regions: any[];
@@ -19,9 +21,29 @@ interface RegionsListProps {
 
 const RegionsList = ({ regions, selectedId, onSelect, onDelete }: RegionsListProps) => {
   const { materials, updateRegion } = useProject();
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState<string>("");
 
   const handleMaterialChange = (regionId: string, materialId: string) => {
     updateRegion(regionId, { materialId });
+  };
+  
+  const startEditing = (regionId: string, currentName: string) => {
+    setEditingId(regionId);
+    setEditingName(currentName);
+  };
+  
+  const saveEdit = (regionId: string) => {
+    updateRegion(regionId, { name: editingName });
+    setEditingId(null);
+  };
+  
+  const handleKeyDown = (e: React.KeyboardEvent, regionId: string) => {
+    if (e.key === "Enter") {
+      saveEdit(regionId);
+    } else if (e.key === "Escape") {
+      setEditingId(null);
+    }
   };
 
   if (regions.length === 0) {
@@ -49,19 +71,43 @@ const RegionsList = ({ regions, selectedId, onSelect, onDelete }: RegionsListPro
                   className="w-4 h-4 rounded-full mr-2" 
                   style={{ backgroundColor: region.color }}
                 />
-                <span className="font-medium">Region {region.id.slice(-4)}</span>
+                {editingId === region.id ? (
+                  <Input 
+                    value={editingName}
+                    onChange={(e) => setEditingName(e.target.value)}
+                    onBlur={() => saveEdit(region.id)}
+                    onKeyDown={(e) => handleKeyDown(e, region.id)}
+                    className="h-6 w-32 px-1 py-0"
+                    autoFocus
+                  />
+                ) : (
+                  <span className="font-medium">{region.name || `Region ${region.id.slice(-4)}`}</span>
+                )}
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDelete(region.id);
-                }}
-                className="h-6 w-6"
-              >
-                <TrashIcon className="h-4 w-4" />
-              </Button>
+              <div className="flex">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    startEditing(region.id, region.name || `Region ${region.id.slice(-4)}`);
+                  }}
+                  className="h-6 w-6 mr-1"
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(region.id);
+                  }}
+                  className="h-6 w-6"
+                >
+                  <TrashIcon className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
             
             <div className="mt-2 text-sm">
