@@ -1,40 +1,35 @@
-import { useRef, useState, useEffect } from "react";
-import { useProject } from "@/context/ProjectContext";
-import { Stage, Layer, Line, Circle } from "react-konva";
+import React, { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { Document, Page, pdfjs } from "react-pdf";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { 
-  ArrowLeft, 
-  ArrowRight, 
-  CheckIcon,
+import {
+  ArrowLeft,
+  ArrowRight,
   Plus,
-  MinusIcon, 
+  MinusIcon,
+  CheckIcon,
   TrashIcon
 } from "lucide-react";
+import { useProject } from "@/context/ProjectContext";
 import { toast } from "sonner";
-import ScaleCalibrationTool from "./ScaleCalibrationTool";
 import RegionsList from "./RegionsList";
 import { generateRandomColor } from "@/lib/utils";
+import { useLocation } from "react-router-dom";
+import { nanoid } from "nanoid";
 
-// Placeholder for PDF rendering
-// In a real app, we would use pdfjs-dist to render each page
-const mockPdfRendering = (pageNumber: number, width: number) => {
-  return {
-    width,
-    height: width * 1.414, // A4 proportion
-  };
-};
+pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.mjs";
 
 enum DrawingMode {
   None,
   Drawing,
-  Scaling
+  Scaling // <-- We'll use this for calibration mode
 }
 
 const BlueprintView = () => {
   const {
-    pdfUrl,
+    pdfData,
     pageCount,
+    setPageCount,
     currentPage,
     setCurrentPage,
     regions,
@@ -42,6 +37,7 @@ const BlueprintView = () => {
     updateRegion,
     deleteRegion,
     scale,
+    setScale,
   } = useProject();
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -51,71 +47,143 @@ const BlueprintView = () => {
   const [currentPoints, setCurrentPoints] = useState<number[]>([]);
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
+  const [calibrationInput, setCalibrationInput] = useState("");
+  const [calibrationUnit, setCalibrationUnit] = useState("ft");
+  const [editingRegionId, setEditingRegionId] = useState<string | null>(null);
+  const [editingPoints, setEditingPoints] = useState<number[] | null>(null);
+  const [draggedPointIdx, setDraggedPointIdx] = useState<number | null>(null);
 
-  // Update container dimensions when the window resizes
+  // Only update container size on mount and window resize
   useEffect(() => {
     const updateDimensions = () => {
       if (containerRef.current) {
         setContainerWidth(containerRef.current.offsetWidth);
-        setContainerHeight(window.innerHeight * 0.7);
+        setContainerHeight(containerRef.current.offsetHeight || window.innerHeight * 0.7);
       }
     };
-
-    updateDimensions();
     window.addEventListener("resize", updateDimensions);
+    updateDimensions();
     return () => window.removeEventListener("resize", updateDimensions);
+  }, []); // <-- Only run once on mount
+
+  // Only reset page when a new PDF is loaded (do not reset on tab switch)
+  useEffect(() => {
+    if (pdfData && currentPage === 0) {
+      setCurrentPage(1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfData]);
+
+  // Track and restore last viewed page when switching tabs
+  useEffect(() => {
+    // Save current page to localStorage on change
+    localStorage.setItem("blueprint-last-page", String(currentPage));
+  }, [currentPage]);
+
+  useEffect(() => {
+    // Restore last page if available (only on mount)
+    const lastPage = Number(localStorage.getItem("blueprint-last-page"));
+    if (lastPage && lastPage !== currentPage) {
+      setCurrentPage(lastPage);
+    }
+    // eslint-disable-next-line
   }, []);
 
-  // Get PDF dimensions (in a real app, this would come from the PDF)
-  const pdfDimensions = mockPdfRendering(currentPage, containerWidth);
-
-  // Handle region drawing
-  const handleStageClick = (e: any) => {
+  // Unified SVG click handler for both region and calibration
+  const handleSvgClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (drawingMode === DrawingMode.Scaling) {
+      // Calibration mode: only allow two points
+      if (currentPoints.length >= 4) return;
+      const svg = e.currentTarget;
+      if (!svg) return;
+      if (typeof svg.createSVGPoint !== "function") return;
+      const pt = svg.createSVGPoint();
+      pt.x = e.clientX;
+      pt.y = e.clientY;
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return;
+      const cursorpt = pt.matrixTransform(ctm.inverse());
+      setCurrentPoints(prev => [...prev, cursorpt.x, cursorpt.y]);
+      return;
+    }
     if (drawingMode !== DrawingMode.Drawing) return;
-
-    const stage = e.target.getStage();
-    const pointerPosition = stage.getPointerPosition();
-    
-    if (!pointerPosition) return;
-    
-    const { x, y } = pointerPosition;
-    setCurrentPoints([...currentPoints, x, y]);
+    // Region drawing mode
+    const svg = e.currentTarget;
+    if (!svg) return;
+    setCurrentPoints(prevPoints => {
+      if (typeof svg.createSVGPoint !== "function") return prevPoints;
+      const pt = svg.createSVGPoint();
+      pt.x = e.clientX;
+      pt.y = e.clientY;
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return prevPoints;
+      const cursorpt = pt.matrixTransform(ctm.inverse());
+      return [...prevPoints, cursorpt.x, cursorpt.y];
+    });
   };
 
+  // Complete region drawing
   const completeRegionDrawing = () => {
+    if (drawingMode === DrawingMode.Scaling) return; // Don't allow in calibration mode
     if (currentPoints.length < 6) {
       toast.error("Please draw at least 3 points to create a region");
       return;
     }
-
     // Calculate area in square pixels
     const pixelArea = calculatePolygonArea(currentPoints);
-    
     // Convert to square feet based on scale
     const realWorldArea = pixelArea / (scale * scale);
-    
     addRegion({
       pageNumber: currentPage,
       points: [...currentPoints],
       materialId: null,
       area: parseFloat(realWorldArea.toFixed(2)),
-      color: generateRandomColor(),
+      color: generateRandomColor(), // Always randomize color on create
     });
-
     setCurrentPoints([]);
     setDrawingMode(DrawingMode.None);
     toast.success("Region created successfully");
   };
 
+  // Cancel drawing or calibration
   const cancelDrawing = () => {
     setCurrentPoints([]);
     setDrawingMode(DrawingMode.None);
+    setCalibrationInput("");
+    setCalibrationUnit("ft");
+  };
+
+  // Calibration helpers
+  const getCalibrationPixelDistance = () => {
+    if (currentPoints.length !== 4) return 0;
+    const [x1, y1, x2, y2] = currentPoints;
+    return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+  };
+
+  const handleCalibrationSave = () => {
+    const pixelDist = getCalibrationPixelDistance();
+    const realDist = parseFloat(calibrationInput);
+    if (pixelDist === 0 || !realDist || realDist <= 0) {
+      toast.error("Please select two points and enter a valid real-world distance.");
+      return;
+    }
+    // Convert to feet for scale if needed
+    let realDistInFeet = realDist;
+    if (calibrationUnit === "in") realDistInFeet = realDist / 12;
+    else if (calibrationUnit === "cm") realDistInFeet = realDist / 30.48;
+    else if (calibrationUnit === "m") realDistInFeet = realDist * 3.28084;
+    const newScale = pixelDist / realDistInFeet;
+    setScale(newScale);
+    setCurrentPoints([]);
+    setDrawingMode(DrawingMode.None);
+    setCalibrationInput("");
+    setCalibrationUnit("ft");
+    toast.success("Scale calibrated!");
   };
 
   const calculatePolygonArea = (points: number[]): number => {
     let area = 0;
     const numPoints = points.length / 2;
-    
     for (let i = 0, j = numPoints - 1; i < numPoints; j = i++) {
       const x1 = points[i * 2];
       const y1 = points[i * 2 + 1];
@@ -124,7 +192,6 @@ const BlueprintView = () => {
       area += x1 * y2;
       area -= y1 * x2;
     }
-    
     area = Math.abs(area) / 2;
     return area;
   };
@@ -145,73 +212,305 @@ const BlueprintView = () => {
 
   const pageRegions = regions.filter(r => r.pageNumber === currentPage);
 
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex justify-between items-center">
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={currentPage <= 1}
-            onClick={() => navigateToPage('prev')}
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          
-          <span className="text-sm">
-            Page {currentPage} of {pageCount}
-          </span>
-          
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={currentPage >= pageCount}
-            onClick={() => navigateToPage('next')}
-          >
-            <ArrowRight className="h-4 w-4" />
-          </Button>
-        </div>
-        
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setZoom(prev => Math.max(0.5, prev - 0.1))}
-          >
-            <MinusIcon className="h-4 w-4" />
-          </Button>
-          <span className="text-sm w-16 text-center">{Math.round(zoom * 100)}%</span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setZoom(prev => Math.min(2, prev + 0.1))}
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-        </div>
+  // Fix: setPageCount only when numPages is available, and don't reset pageCount to 0 in context
+  // Fix: Memoize handleLoadSuccess with useCallback and use correct renderMode
+  const handleLoadSuccess = useCallback(
+    ({ numPages }: { numPages: number }) => {
+      setPageCount(numPages);
+    },
+    [setPageCount]
+  );
 
-        <div className="flex items-center gap-2">
-          <ScaleCalibrationTool />
-          
-          {drawingMode === DrawingMode.Drawing ? (
-            <>
-              <Button 
-                variant="outline"
-                size="sm"
-                onClick={completeRegionDrawing}
-              >
-                <CheckIcon className="h-4 w-4 mr-1" />
-                Complete Region
-              </Button>
-              <Button 
-                variant="ghost"
-                size="sm"
-                onClick={cancelDrawing}
-              >
-                Cancel
-              </Button>
-            </>
-          ) : (
+  // Memoize the PDF Document/Page layer so it only re-renders when pdfData, currentPage, zoom, or container size changes
+  const renderedPdf = useMemo(() => (
+    <div
+      style={{
+        width: "100%",
+        height: "100%",
+        pointerEvents: "none",
+        background: "transparent",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        position: "absolute",
+        left: 0,
+        top: 0,
+        zIndex: 1,
+      }}
+    >
+      <Document
+        file={pdfData ? { data: new Uint8Array(pdfData) } : undefined}
+        onLoadSuccess={handleLoadSuccess}
+        loading={<div>Loading PDF...</div>}
+        error={<div>Failed to load PDF.</div>}
+      >
+        <Page
+          pageNumber={currentPage}
+          width={containerWidth * zoom}
+          renderAnnotationLayer={false}
+          renderTextLayer={false}
+          renderMode={"svg" as any}
+        />
+      </Document>
+    </div>
+  ), [pdfData, currentPage, containerWidth, zoom, handleLoadSuccess]);
+
+  // Move these function declarations above renderedRegions so they are defined before use
+  const handleRegionEdit = (regionId: string) => {
+    const region = regions.find(r => r.id === regionId);
+    if (region) {
+      setEditingRegionId(regionId);
+      setEditingPoints([...region.points]);
+      setDrawingMode(DrawingMode.None);
+    }
+  };
+
+  const handlePointMouseDown = (idx: number) => {
+    setDraggedPointIdx(idx);
+  };
+
+  const handleSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (editingRegionId && editingPoints && draggedPointIdx !== null) {
+      const svg = e.currentTarget;
+      if (typeof svg.createSVGPoint !== "function") return;
+      const pt = svg.createSVGPoint();
+      pt.x = e.clientX;
+      pt.y = e.clientY;
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return;
+      const cursorpt = pt.matrixTransform(ctm.inverse());
+      const newPoints = [...editingPoints];
+      newPoints[draggedPointIdx] = cursorpt.x;
+      newPoints[draggedPointIdx + 1] = cursorpt.y;
+      setEditingPoints(newPoints);
+    }
+  };
+
+  const handleSvgMouseUp = () => {
+    setDraggedPointIdx(null);
+  };
+
+  const handleSaveEditedRegion = () => {
+    if (editingRegionId && editingPoints) {
+      updateRegion(editingRegionId, { points: editingPoints });
+      setEditingRegionId(null);
+      setEditingPoints(null);
+      setDraggedPointIdx(null);
+      toast.success("Region points updated!");
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingRegionId(null);
+    setEditingPoints(null);
+    setDraggedPointIdx(null);
+  };
+
+  // Memoize region polygons, with edit handles if editing
+  const renderedRegions = useMemo(() => (
+    pageRegions.map((region) => {
+      const isEditing = editingRegionId === region.id;
+      const pointsToRender = isEditing && editingPoints ? editingPoints : region.points;
+      return (
+        <g key={region.id}>
+          <polygon
+            points={pointsToRender.map((p, i) =>
+              i % 2 === 0
+                ? `${pointsToRender[i] * zoom},${pointsToRender[i + 1] * zoom}`
+                : null
+            ).filter(Boolean).join(" ")}
+            fill={region.color + "80"}
+            stroke={selectedRegionId === region.id ? "#3b82f6" : region.color}
+            strokeWidth={isEditing ? 1 : selectedRegionId === region.id ? 2 : 1}
+            opacity={isEditing ? 0.5 : 1}
+            onClick={e => {
+              e.stopPropagation();
+              setSelectedRegionId(region.id);
+              // Start editing on double click
+              if (e.detail === 2) handleRegionEdit(region.id);
+            }}
+            style={{ cursor: isEditing ? "move" : "pointer" }}
+          />
+          {/* Render draggable points if editing */}
+          {isEditing && pointsToRender.length >= 2 && Array.from({ length: pointsToRender.length / 2 }).map((_, i) => (
+            <circle
+              key={i}
+              cx={pointsToRender[i * 2] * zoom}
+              cy={pointsToRender[i * 2 + 1] * zoom}
+              r={1}
+              fill="#3b82f6"
+              opacity={0.5}
+              stroke="#fff"
+              strokeWidth={0.7}
+              style={{ cursor: "pointer" }}
+              onMouseDown={e => {
+                e.stopPropagation();
+                handlePointMouseDown(i * 2);
+              }}
+            />
+          ))}
+        </g>
+      );
+    })
+  ), [pageRegions, zoom, selectedRegionId, editingRegionId, editingPoints]);
+
+  // Memoize current drawing polyline and points
+  const renderedDrawing = useMemo(() => (
+    drawingMode === DrawingMode.Drawing && currentPoints.length > 0 ? (
+      <>
+        <polyline
+          // Thinner, more transparent line for accuracy
+          points={currentPoints.map((p, i) =>
+            i % 2 === 0
+              ? `${currentPoints[i] * zoom},${currentPoints[i + 1] * zoom}`
+              : null
+          ).filter(Boolean).join(" ")}
+          fill="none"
+          stroke="#3b82f6"
+          strokeWidth={1}
+          strokeDasharray="3,3"
+          opacity={0.7}
+        />
+        {Array.from({ length: currentPoints.length / 2 }).map((_, i) => (
+          <circle
+            key={i}
+            cx={currentPoints[i * 2] * zoom}
+            cy={currentPoints[i * 2 + 1] * zoom}
+            r={2.5}
+            fill="#3b82f6"
+            opacity={0.6}
+            stroke="#fff"
+            strokeWidth={0.7}
+          />
+        ))}
+      </>
+    ) : null
+  ), [drawingMode, currentPoints, zoom]);
+
+  // Memoize calibration line/points for overlay
+  const renderedCalibration = useMemo(() => (
+    drawingMode === DrawingMode.Scaling && currentPoints.length >= 2 ? (
+      <>
+        {currentPoints.length === 4 && (
+          <line
+            x1={currentPoints[0]}
+            y1={currentPoints[1]}
+            x2={currentPoints[2]}
+            y2={currentPoints[3]}
+            stroke="#f59e42"
+            strokeWidth={1}
+            opacity={0.7}
+          />
+        )}
+        <circle
+          cx={currentPoints[0]}
+          cy={currentPoints[1]}
+          r={2.5}
+          fill="#f59e42"
+          opacity={0.6}
+          stroke="#fff"
+          strokeWidth={0.7}
+        />
+        {currentPoints.length === 4 && (
+          <circle
+            cx={currentPoints[2]}
+            cy={currentPoints[3]}
+            r={2.5}
+            fill="#f59e42"
+            opacity={0.6}
+            stroke="#fff"
+            strokeWidth={0.7}
+          />
+        )}
+      </>
+    ) : null
+  ), [drawingMode, currentPoints]);
+
+  return (
+    <div className="flex flex-col gap-4 h-full">
+      {/* Page navigation and drawing controls */}
+      {pdfData && (
+        <div className="flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage <= 1}
+              onClick={() => navigateToPage('prev')}
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <span className="text-sm">
+              Page {currentPage} of {pageCount}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage >= pageCount}
+              onClick={() => navigateToPage('next')}
+            >
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setZoom(prev => Math.max(0.5, prev - 0.1))}
+            >
+              <MinusIcon className="h-4 w-4" />
+            </Button>
+            <span className="text-sm w-16 text-center">{Math.round(zoom * 100)}%</span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setZoom(prev => Math.min(2, prev + 0.1))}
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant={drawingMode === DrawingMode.Scaling ? "secondary" : "outline"}
+              size="sm"
+              onClick={() => {
+                setDrawingMode(DrawingMode.Scaling);
+                setCurrentPoints([]);
+                setCalibrationInput("");
+                setCalibrationUnit("ft");
+              }}
+            >
+              Calibrate Scale
+            </Button>
+            {drawingMode === DrawingMode.Scaling && (
+              <div className="flex items-center gap-2 ml-2">
+                <input
+                  type="number"
+                  className="border px-2 py-1 rounded w-20 text-black bg-white"
+                  placeholder="Length"
+                  value={calibrationInput}
+                  onChange={e => setCalibrationInput(e.target.value)}
+                  style={{ color: "#000", background: "#fff" }}
+                />
+                <select
+                  className="border px-1 py-1 rounded text-black bg-white"
+                  value={calibrationUnit}
+                  onChange={e => setCalibrationUnit(e.target.value)}
+                  style={{ color: "#000", background: "#fff" }}
+                >
+                  <option value="ft">ft</option>
+                  <option value="in">in</option>
+                  <option value="m">m</option>
+                  <option value="cm">cm</option>
+                </select>
+                <Button size="sm" onClick={handleCalibrationSave} disabled={currentPoints.length !== 4 || !calibrationInput}>
+                  Set Scale
+                </Button>
+                <Button size="sm" variant="ghost" onClick={cancelDrawing}>
+                  Cancel
+                </Button>
+              </div>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -220,72 +519,75 @@ const BlueprintView = () => {
               <Plus className="h-4 w-4 mr-1" />
               Draw Region
             </Button>
-          )}
+            {/* Show Complete/Cancel buttons when drawing a region */}
+            {drawingMode === DrawingMode.Drawing && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={completeRegionDrawing}
+                  disabled={currentPoints.length < 6}
+                >
+                  <CheckIcon className="h-4 w-4 mr-1" />
+                  Complete Region
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={cancelDrawing}
+                >
+                  Cancel
+                </Button>
+              </>
+            )}
+          </div>
         </div>
-      </div>
-      
+      )}
+      {/* Show Save/Cancel when editing region points at the top of the PDF window */}
+      {editingRegionId && (
+        <div className="flex gap-2 mb-2 justify-center">
+          <Button size="sm" variant="outline" onClick={handleSaveEditedRegion}>
+            Save Region Points
+          </Button>
+          <Button size="sm" variant="ghost" onClick={handleCancelEdit}>
+            Cancel
+          </Button>
+        </div>
+      )}
+      {/* PDF and Drawing Overlay */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card className="md:col-span-3">
           <CardContent className="p-4">
-            <div 
-              ref={containerRef} 
-              className="relative border border-border rounded-md overflow-hidden"
-              style={{ height: `${containerHeight}px` }}
+            <div
+              ref={containerRef}
+              className="relative border border-border rounded-md overflow-hidden w-full h-full"
+              style={{ minHeight: 400, height: `${containerHeight}px` }}
             >
-              {pdfUrl ? (
-                <Stage
-                  width={containerWidth}
-                  height={containerHeight}
-                  onClick={handleStageClick}
-                  className={drawingMode === DrawingMode.Drawing ? "drawing-cursor" : ""}
-                  scale={{ x: zoom, y: zoom }}
-                  draggable={drawingMode === DrawingMode.None}
-                >
-                  <Layer>
-                    {/* Background placeholder */}
-                    <Line
-                      points={[0, 0, pdfDimensions.width, 0, pdfDimensions.width, pdfDimensions.height, 0, pdfDimensions.height]}
-                      closed
-                      fill="#f0f0f0"
-                    />
-                    
-                    {/* Existing regions */}
-                    {pageRegions.map((region) => (
-                      <Line
-                        key={region.id}
-                        points={region.points}
-                        closed
-                        fill={region.color + "80"}
-                        stroke={selectedRegionId === region.id ? "#3b82f6" : region.color}
-                        strokeWidth={selectedRegionId === region.id ? 2 : 1}
-                        onClick={() => setSelectedRegionId(region.id)}
-                        className="region"
-                      />
-                    ))}
-                    
-                    {/* Currently drawing region */}
-                    {currentPoints.length > 0 && (
-                      <Line
-                        points={currentPoints}
-                        stroke="#3b82f6"
-                        strokeWidth={2}
-                        dash={[5, 5]}
-                      />
-                    )}
-                    
-                    {/* Points for the current drawing */}
-                    {currentPoints.length > 0 &&
-                      Array.from({ length: currentPoints.length / 2 }).map((_, i) => (
-                        <Circle
-                          key={i}
-                          x={currentPoints[i * 2]}
-                          y={currentPoints[i * 2 + 1]}
-                          radius={4}
-                          fill="#3b82f6"
-                        />
-                      ))}
-                  </Layer>
-                </Stage>
+              {pdfData ? (
+                <div style={{ width: "100%", height: "100%", position: "relative" }}>
+                  {/* PDF Layer (memoized, only re-renders on page/zoom/size change) */}
+                  {renderedPdf}
+                  {/* SVG Overlay */}
+                  <svg
+                    width={containerWidth}
+                    height={containerHeight}
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      top: 0,
+                      zIndex: 2,
+                      pointerEvents: "auto",
+                    }}
+                    onClick={handleSvgClick}
+                    onMouseMove={handleSvgMouseMove}
+                    onMouseUp={handleSvgMouseUp}
+                    onMouseLeave={handleSvgMouseUp}
+                  >
+                    {renderedRegions}
+                    {renderedDrawing}
+                    {renderedCalibration}
+                  </svg>
+                </div>
               ) : (
                 <div className="flex items-center justify-center h-full bg-muted">
                   <p className="text-muted-foreground">
@@ -296,15 +598,17 @@ const BlueprintView = () => {
             </div>
           </CardContent>
         </Card>
-        
         <Card>
           <CardContent className="p-4">
             <h3 className="font-medium mb-3">Regions on Page {currentPage}</h3>
-            <RegionsList 
-              regions={pageRegions} 
-              selectedId={selectedRegionId} 
-              onSelect={setSelectedRegionId} 
-              onDelete={handleDeleteRegion} 
+            <RegionsList
+              regions={pageRegions}
+              selectedId={selectedRegionId}
+              onSelect={setSelectedRegionId}
+              onDelete={handleDeleteRegion}
+              editingRegionId={editingRegionId}
+              onSaveEdit={handleSaveEditedRegion}
+              onCancelEdit={handleCancelEdit}
             />
           </CardContent>
         </Card>

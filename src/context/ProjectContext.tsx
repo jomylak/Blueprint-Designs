@@ -18,20 +18,20 @@ interface Region {
 }
 
 interface ProjectContextType {
-  pdf: File | null;
-  pdfUrl: string | null;
+  pdfData: Uint8Array | null;
+  loadPdf: (file: File) => Promise<void>;
   pageCount: number;
+  setPageCount: (count: number) => void; // <-- Add this
   currentPage: number;
+  setCurrentPage: (page: number) => void;
   scale: number;
+  setScale: (scale: number) => void;
   scaleUnit: string;
+  setScaleUnit: (unit: string) => void;
   regions: Region[];
   materials: Material[];
   projectName: string;
   setProjectName: (name: string) => void;
-  loadPdf: (file: File) => void;
-  setCurrentPage: (page: number) => void;
-  setScale: (scale: number) => void;
-  setScaleUnit: (unit: string) => void;
   addRegion: (region: Omit<Region, 'id' | 'name'>) => void;
   updateRegion: (id: string, updates: Partial<Region>) => void;
   deleteRegion: (id: string) => void;
@@ -40,20 +40,19 @@ interface ProjectContextType {
   deleteMaterial: (id: string) => void;
   saveProject: () => void;
   loadProject: (data: any) => void;
+  importProject: (file: File) => void;
 }
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
 
 export const ProjectProvider = ({ children }: { children: React.ReactNode }) => {
-  const [pdf, setPdf] = useState<File | null>(null);
-  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pdfData, setPdfData] = useState<Uint8Array | null>(null);
   const [pageCount, setPageCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [scale, setScale] = useState(1);
   const [scaleUnit, setScaleUnit] = useState('ft');
   const [regions, setRegions] = useState<Region[]>([]);
   const [projectName, setProjectName] = useState('');
-  
   const [materials, setMaterials] = useState<Material[]>([
     { id: '1', name: 'Ceramic Tile', pricePerSqFt: 5.99 },
     { id: '2', name: 'Hardwood', pricePerSqFt: 8.50 },
@@ -61,17 +60,12 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
     { id: '4', name: 'Vinyl', pricePerSqFt: 2.99 },
   ]);
 
-  const loadPdf = useCallback((file: File) => {
-    // Revoke existing object URL to prevent memory leaks
-    if (pdfUrl) {
-      URL.revokeObjectURL(pdfUrl);
-    }
-
-    setPdf(file);
-    const url = URL.createObjectURL(file);
-    setPdfUrl(url);
-
-    // Reset project state when loading a new PDF
+  // Only set the PDF data and reset state
+  const loadPdf = async (file: File) => {
+    const arrayBuffer = await file.arrayBuffer();
+    const uint8 = new Uint8Array(arrayBuffer);
+    setPdfData(new Uint8Array(uint8));
+    console.log("pdfData set in context:", uint8.byteLength);
     setProjectName(file.name.replace('.pdf', ''));
     setRegions([]);
     setMaterials([
@@ -83,8 +77,8 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
     setScale(1);
     setScaleUnit('ft');
     setCurrentPage(1);
-    setPageCount(5); // Placeholder
-  }, [pdfUrl]);
+    setPageCount(0); // Will be set by BlueprintView when PDF loads
+  };
 
   const addRegion = useCallback((region: Omit<Region, 'id' | 'name'>) => {
     setRegions(prev => {
@@ -146,96 +140,154 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
     }, 0);
   }, [regions, materials]);
 
+  // Helper functions for PDF <-> base64
+  function uint8ToBase64(uint8: Uint8Array) {
+    // Use chunked conversion to avoid call stack overflow for large PDFs
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < uint8.length; i += chunkSize) {
+      binary += String.fromCharCode.apply(
+        null,
+        uint8.subarray(i, i + chunkSize) as any
+      );
+    }
+    return btoa(binary);
+  }
+  function base64ToUint8(base64: string) {
+    const binary = atob(base64);
+    const uint8 = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) uint8[i] = binary.charCodeAt(i);
+    return uint8;
+  }
+
   const saveProject = useCallback(() => {
     try {
+      // Convert pdfData to base64 for storage
+      const pdfBase64 = pdfData ? uint8ToBase64(pdfData) : null;
       const projectData = {
         name: projectName,
         scale,
         scaleUnit,
         regions,
         materials,
+        pageCount,
+        pdfBase64,
       };
-      
-      // Calculate preview data for the saved projects list
-      const previewData = {
-        regionsCount: regions.length,
-        materialsCount: materials.length,
-        totalCost: calculateTotalCost()
+
+      // Estimate size (in bytes) of the project data
+      const estimateSize = (obj: any) => {
+        try {
+          return new Blob([JSON.stringify(obj)]).size;
+        } catch {
+          return 0;
+        }
       };
-      
-      // Save to localStorage for persistence
-      localStorage.setItem('builderEstimationProject', JSON.stringify(projectData));
-      
-      // Also save to our projects list
+
+      // Save to localStorage (as a list of projects)
       const projectsJson = localStorage.getItem('builderEstimationProjects');
-      let projects = projectsJson ? JSON.parse(projectsJson) : [];
-      
-      // Check if a project with this name already exists
+      let projects = [];
+      try {
+        projects = projectsJson ? JSON.parse(projectsJson) : [];
+      } catch (e) {
+        projects = [];
+      }
       const existingIndex = projects.findIndex((p: any) => p.name === projectName);
       const projectId = existingIndex >= 0 ? projects[existingIndex].id : Date.now().toString();
-      
+
       const savedProject = {
         id: projectId,
         name: projectName,
         date: new Date().toLocaleDateString(),
-        previewData,
         data: projectData
       };
-      
+
+      // Check if the new project will exceed localStorage quota (~5MB)
+      const testProjects = [...projects];
       if (existingIndex >= 0) {
-        // Update existing project
+        testProjects[existingIndex] = savedProject;
+      } else {
+        testProjects.push(savedProject);
+      }
+      const estimatedSize = estimateSize(testProjects);
+
+      // 5MB = 5 * 1024 * 1024 = 5242880 bytes (most browsers)
+      if (estimatedSize > 5 * 1024 * 1024) {
+        // Offer user to download the project as a file instead
+        toast.error('Project is too large for browser storage. Downloading as file instead.');
+        const blob = new Blob([JSON.stringify(savedProject)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${projectName || 'project'}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        return false;
+      }
+
+      if (existingIndex >= 0) {
         projects[existingIndex] = savedProject;
       } else {
-        // Add new project
         projects.push(savedProject);
       }
-      
       localStorage.setItem('builderEstimationProjects', JSON.stringify(projects));
-      
-      // Create a download link for the JSON file
-      const json = JSON.stringify(projectData);
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${projectName || 'project'}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      
+      toast.success('Project saved!');
       return true;
     } catch (error) {
       console.error('Error saving project:', error);
-      toast.error('Failed to save project');
+      toast.error('Failed to save project. Your browser storage may be full.');
       return false;
     }
-  }, [projectName, scale, scaleUnit, regions, materials, calculateTotalCost]);
+  }, [pdfData, projectName, scale, scaleUnit, regions, materials, pageCount]);
 
   const loadProject = useCallback((data: any) => {
     try {
       setProjectName(data.name || 'Imported Project');
       setScale(data.scale || 1);
       setScaleUnit(data.scaleUnit || 'ft');
-      
-      // Ensure all regions have name property
-      const updatedRegions = (data.regions || []).map((region: Region, index: number) => {
-        if (!region.name) {
-          return { ...region, name: `Region ${index + 1}` };
-        }
-        return region;
-      });
-      
-      setRegions(updatedRegions);
+      setPageCount(data.pageCount || 0);
+      setRegions((data.regions || []).map((region: Region, idx: number) =>
+        region.name ? region : { ...region, name: `Region ${idx + 1}` }
+      ));
       setMaterials(data.materials || []);
-      toast.success('Project loaded successfully');
+      setCurrentPage(1);
+      // Restore PDF from base64
+      if (data.pdfBase64) {
+        // SAFETY: Wait for setPdfData to finish before rendering PDF
+        setPdfData(base64ToUint8(data.pdfBase64));
+      } else {
+        setPdfData(null);
+      }
+      // Wait for PDF to be set before rendering (prevents sendWithPromise error)
+      setTimeout(() => {
+        toast.success('Project loaded successfully');
+      }, 100);
       return true;
     } catch (error) {
       console.error('Error loading project:', error);
       toast.error('Failed to load project');
       return false;
     }
-  }, []);
+  }, [setProjectName, setScale, setScaleUnit, setPageCount, setRegions, setMaterials, setCurrentPage, setPdfData]);
+
+  // Import project from JSON file
+  const importProject = useCallback((file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result as string;
+        const imported = JSON.parse(text);
+        // Accept both single project and wrapped {data: ...} format
+        const projectData = imported.data || imported;
+        loadProject(projectData);
+        toast.success('Project imported successfully!');
+      } catch (error) {
+        toast.error('Failed to import project: Invalid file.');
+      }
+    };
+    reader.readAsText(file);
+  }, [loadProject]);
 
   // Load last project from localStorage on initial render
   useEffect(() => {
@@ -253,20 +305,20 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
   return (
     <ProjectContext.Provider
       value={{
-        pdf,
-        pdfUrl,
+        pdfData,
+        loadPdf,
         pageCount,
+        setPageCount, // <-- Add this
         currentPage,
+        setCurrentPage,
         scale,
+        setScale,
         scaleUnit,
+        setScaleUnit,
         regions,
         materials,
         projectName,
         setProjectName,
-        loadPdf,
-        setCurrentPage,
-        setScale,
-        setScaleUnit,
         addRegion,
         updateRegion,
         deleteRegion,
@@ -275,6 +327,7 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
         deleteMaterial,
         saveProject,
         loadProject,
+        importProject, // <-- add to context
       }}
     >
       {children}

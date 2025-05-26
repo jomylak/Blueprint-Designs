@@ -1,4 +1,3 @@
-
 import { useState } from "react";
 import { useProject } from "@/context/ProjectContext";
 import {
@@ -85,7 +84,7 @@ const EstimationSummary = () => {
       const material = materials.find(m => m.id === region.materialId);
       return [
         region.pageNumber,
-        `Region ${region.id.slice(-4)}`,
+        region.name || `Region ${region.id.slice(-4)}`, // <-- Use region.name if available
         material ? material.name : 'Unassigned',
         region.area.toFixed(2),
         material ? `$${material.pricePerSqFt.toFixed(2)}` : '-',
@@ -242,7 +241,7 @@ const EstimationSummary = () => {
                           className="w-3 h-3 rounded-full mr-2" 
                           style={{ backgroundColor: region.color }}
                         />
-                        Region {region.id.slice(-4)}
+                        {region.name || `Region ${region.id.slice(-4)}`} {/* <-- Use region.name */}
                       </div>
                     </TableCell>
                     <TableCell>{material ? material.name : 'Unassigned'}</TableCell>

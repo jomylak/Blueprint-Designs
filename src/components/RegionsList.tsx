@@ -1,4 +1,3 @@
-
 import { useProject } from "@/context/ProjectContext";
 import { Button } from "@/components/ui/button";
 import { 
@@ -17,13 +16,30 @@ interface RegionsListProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
+  editingRegionId?: string | null;
+  onSaveEdit?: () => void;
+  onCancelEdit?: () => void;
 }
 
-const RegionsList = ({ regions, selectedId, onSelect, onDelete }: RegionsListProps) => {
+const RegionsList = ({
+  regions,
+  selectedId,
+  onSelect,
+  onDelete,
+  editingRegionId,
+  onSaveEdit,
+  onCancelEdit,
+}: RegionsListProps) => {
   const { materials, updateRegion } = useProject();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<string>("");
 
+  // Save edit and update region name everywhere (force update in context)
+  const saveEdit = (regionId: string) => {
+    updateRegion(regionId, { name: editingName });
+    setEditingId(null);
+  };
+  
   const handleMaterialChange = (regionId: string, materialId: string) => {
     updateRegion(regionId, { materialId });
   };
@@ -31,11 +47,6 @@ const RegionsList = ({ regions, selectedId, onSelect, onDelete }: RegionsListPro
   const startEditing = (regionId: string, currentName: string) => {
     setEditingId(regionId);
     setEditingName(currentName);
-  };
-  
-  const saveEdit = (regionId: string) => {
-    updateRegion(regionId, { name: editingName });
-    setEditingId(null);
   };
   
   const handleKeyDown = (e: React.KeyboardEvent, regionId: string) => {
@@ -59,6 +70,7 @@ const RegionsList = ({ regions, selectedId, onSelect, onDelete }: RegionsListPro
     <div className="space-y-3 max-h-[400px] overflow-y-auto">
       {regions.map((region) => {
         const material = materials.find(m => m.id === region.materialId);
+        const isEditing = editingRegionId === region.id;
         return (
           <div 
             key={region.id}
@@ -109,7 +121,17 @@ const RegionsList = ({ regions, selectedId, onSelect, onDelete }: RegionsListPro
                 </Button>
               </div>
             </div>
-            
+            {/* Show Save/Cancel for region point editing */}
+            {isEditing && onSaveEdit && onCancelEdit && (
+              <div className="flex gap-2 mt-2">
+                <Button size="sm" variant="outline" onClick={onSaveEdit}>
+                  Save Points
+                </Button>
+                <Button size="sm" variant="ghost" onClick={onCancelEdit}>
+                  Cancel
+                </Button>
+              </div>
+            )}
             <div className="mt-2 text-sm">
               <div className="flex justify-between mb-1">
                 <span className="text-muted-foreground">Area:</span>

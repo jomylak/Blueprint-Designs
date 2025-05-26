@@ -1,120 +1,123 @@
-
-import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { RulerIcon } from "lucide-react";
+import React, { useState } from "react";
 import { useProject } from "@/context/ProjectContext";
+import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
+// This tool lets the user draw a line on the blueprint and enter the real-world length for calibration.
 const ScaleCalibrationTool = () => {
-  const { scale, setScale, scaleUnit, setScaleUnit } = useProject();
-  const [isOpen, setIsOpen] = useState(false);
-  const [referenceLength, setReferenceLength] = useState("10");
-  const [tempScale, setTempScale] = useState(scale);
-  const [tempUnit, setTempUnit] = useState(scaleUnit);
-  
-  const handleSave = () => {
-    setScale(Number(tempScale));
-    setScaleUnit(tempUnit);
-    toast.success(`Scale set to 1 pixel = ${tempScale} ${tempUnit}`);
-    setIsOpen(false);
+  const { scale, setScale } = useProject();
+  const [isCalibrating, setIsCalibrating] = useState(false);
+  const [points, setPoints] = useState<number[]>([]);
+  const [inputValue, setInputValue] = useState("");
+  const [unit, setUnit] = useState("ft");
+
+  // Start calibration mode
+  const startCalibration = () => {
+    setIsCalibrating(true);
+    setPoints([]);
+    setInputValue("");
   };
 
-  const handleSimulatedCalibration = () => {
-    // In a real app, this would involve drawing a line on the blueprint
-    // and calculating pixel-to-real-world ratio
-    const measuredPixels = 100; // This would come from user drawing a line
-    const realWorldLength = Number(referenceLength);
-    
-    if (realWorldLength <= 0) {
-      toast.error("Please enter a valid reference length");
+  // Handle click on the SVG overlay to pick two points
+  const handleSvgClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!isCalibrating) return;
+    const svg = e.currentTarget;
+    if (typeof svg.createSVGPoint !== "function") return;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return;
+    const cursorpt = pt.matrixTransform(ctm.inverse());
+    setPoints((prev) => [...prev, cursorpt.x, cursorpt.y]);
+  };
+
+  // Calculate pixel distance between two points
+  const getPixelDistance = () => {
+    if (points.length !== 4) return 0;
+    const [x1, y1, x2, y2] = points;
+    return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+  };
+
+  // When user enters real-world length and confirms
+  const handleCalibrate = () => {
+    const pixelDist = getPixelDistance();
+    const realDist = parseFloat(inputValue);
+    if (pixelDist === 0 || !realDist || realDist <= 0) {
+      toast.error("Please select two points and enter a valid real-world distance.");
       return;
     }
-    
-    const newScale = realWorldLength / measuredPixels;
-    setTempScale(Number(newScale.toFixed(6)));
-    toast.success("Calibration measurement applied");
+    // Calculate scale: pixels per real-world unit
+    const newScale = pixelDist / realDist;
+    setScale(newScale);
+    setIsCalibrating(false);
+    setPoints([]);
+    setInputValue("");
+    toast.success("Scale calibrated!");
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={setIsOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm">
-          <RulerIcon className="h-4 w-4 mr-1" />
-          Set Scale
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="sm:max-w-[425px]">
-        <DialogHeader>
-          <DialogTitle>Scale Calibration</DialogTitle>
-          <DialogDescription>
-            Set the scale to convert pixel measurements to real-world dimensions.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-4 py-4">
-          <div className="grid grid-cols-4 items-center gap-4">
-            <Label htmlFor="scale" className="col-span-1">Scale</Label>
-            <Input
-              id="scale"
-              type="number"
-              step="0.000001"
-              value={tempScale}
-              onChange={(e) => setTempScale(Number(e.target.value))}
-              className="col-span-2"
-            />
-            <Select value={tempUnit} onValueChange={setTempUnit}>
-              <SelectTrigger className="col-span-1">
-                <SelectValue placeholder="Unit" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ft">ft</SelectItem>
-                <SelectItem value="m">m</SelectItem>
-                <SelectItem value="cm">cm</SelectItem>
-                <SelectItem value="in">in</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          
-          <div className="border-t border-border pt-4">
-            <h4 className="text-sm font-medium mb-2">Calibration Helper</h4>
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="reference" className="col-span-1">Reference</Label>
-              <Input
-                id="reference"
-                type="number"
-                value={referenceLength}
-                onChange={(e) => setReferenceLength(e.target.value)}
-                className="col-span-2"
+    <div>
+      <Button
+        variant={isCalibrating ? "secondary" : "outline"}
+        size="sm"
+        onClick={startCalibration}
+      >
+        Calibrate Scale
+      </Button>
+      {isCalibrating && (
+        <div className="mt-2 space-y-2">
+          <p className="text-xs">Click two points on the blueprint to measure a known distance.</p>
+          <svg
+            width="100%"
+            height="40"
+            style={{ display: "block", pointerEvents: "auto", background: "#f9fafb" }}
+            onClick={handleSvgClick}
+          >
+            {points.length === 4 && (
+              <line
+                x1={points[0]}
+                y1={points[1]}
+                x2={points[2]}
+                y2={points[3]}
+                stroke="#3b82f6"
+                strokeWidth={2}
               />
-              <div className="col-span-1">{tempUnit}</div>
-            </div>
-            <div className="mt-2">
-              <Button type="button" variant="outline" size="sm" onClick={handleSimulatedCalibration}>
-                Apply Measurement
+            )}
+            {points.length >= 2 && (
+              <circle cx={points[0]} cy={points[1]} r={4} fill="#3b82f6" />
+            )}
+            {points.length === 4 && (
+              <circle cx={points[2]} cy={points[3]} r={4} fill="#3b82f6" />
+            )}
+          </svg>
+          {points.length === 4 && (
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                className="border px-2 py-1 rounded w-20"
+                placeholder="Length"
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+              />
+              <select
+                className="border px-1 py-1 rounded"
+                value={unit}
+                onChange={(e) => setUnit(e.target.value)}
+              >
+                <option value="ft">ft</option>
+                <option value="in">in</option>
+                <option value="m">m</option>
+                <option value="cm">cm</option>
+              </select>
+              <Button size="sm" onClick={handleCalibrate}>
+                Set Scale
               </Button>
-              <p className="text-xs text-muted-foreground mt-2">
-                In a full implementation, you would draw a line on the blueprint and enter the real-world length it represents.
-              </p>
             </div>
-          </div>
+          )}
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setIsOpen(false)}>Cancel</Button>
-          <Button onClick={handleSave}>Save Scale</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      )}
+    </div>
   );
 };
 

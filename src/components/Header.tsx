@@ -1,11 +1,12 @@
-
 import { useProject } from "@/context/ProjectContext";
 import { Button } from "@/components/ui/button";
 import { FileIcon, FolderIcon, Upload } from "lucide-react";
 import { toast } from "sonner";
+import { useRef } from "react";
 
 const Header = () => {
-  const { loadPdf, projectName, saveProject } = useProject();
+  const { loadPdf, projectName, saveProject, importProject } = useProject();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -20,14 +21,26 @@ const Header = () => {
     toast.success("Project saved successfully");
   };
 
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      importProject(file);
+    }
+    e.target.value = ""; // allow re-importing same file
+  };
+
   return (
     <header className="bg-card border-b border-border">
       <div className="container mx-auto py-3 px-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 bg-primary rounded-md flex items-center justify-center">
-            <span className="text-white font-bold text-sm">BE</span>
+            <span className="text-white font-bold text-sm">BD</span>
           </div>
-          <h1 className="text-lg font-semibold">Builder Estimation</h1>
+          <h1 className="text-lg font-semibold">Blueprint Designs</h1>
         </div>
 
         <div className="flex gap-2">
@@ -47,7 +60,7 @@ const Header = () => {
             onChange={handleFileUpload}
             className="hidden"
           />
-          
+
           <Button
             variant="outline"
             size="sm"
@@ -58,6 +71,22 @@ const Header = () => {
             <FolderIcon className="h-4 w-4" />
             <span>Save Project</span>
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleImportClick}
+            className="flex items-center gap-1"
+          >
+            <FileIcon className="h-4 w-4" />
+            <span>Import Project</span>
+          </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            style={{ display: "none" }}
+            onChange={handleImportFile}
+          />
         </div>
       </div>
     </header>

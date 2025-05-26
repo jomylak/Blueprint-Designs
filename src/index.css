@@ -58,6 +58,11 @@
   border: 1px solid #ccc;
 }
 
+.konvajs-content canvas {
+  background: none !important;
+  background-color: transparent !important;
+}
+
 .region {
   cursor: pointer;
 }

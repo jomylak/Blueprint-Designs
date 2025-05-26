@@ -5,7 +5,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
+import { ProjectProvider } from "@/context/ProjectContext";
 
+console.log("app loaded");
 const queryClient = new QueryClient();
 
 const App = () => (
@@ -13,13 +15,15 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <Sonner />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Index />} />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </BrowserRouter>
+      <ProjectProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<Index />} />
+            {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </BrowserRouter>
+      </ProjectProvider>
     </TooltipProvider>
   </QueryClientProvider>
 );
