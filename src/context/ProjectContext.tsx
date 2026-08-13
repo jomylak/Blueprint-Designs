@@ -57,10 +57,7 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
   const [regions, setRegions] = useState<Region[]>([]);
   const [projectName, setProjectName] = useState('');
   const [materials, setMaterials] = useState<Material[]>([
-    { id: '1', name: 'Ceramic Tile', pricePerSqFt: 5.99 },
-    { id: '2', name: 'Hardwood', pricePerSqFt: 8.50 },
-    { id: '3', name: 'Carpet', pricePerSqFt: 3.75 },
-    { id: '4', name: 'Vinyl', pricePerSqFt: 2.99 },
+    { id: '1', name: 'Stone (Example)', pricePerSqFt: 7.50 },
   ]);
 
   // Changing scale re-derives every existing region's area from its raw (zoom-independent)
@@ -82,10 +79,7 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
     setProjectName(file.name.replace('.pdf', ''));
     setRegions([]);
     setMaterials([
-      { id: '1', name: 'Ceramic Tile', pricePerSqFt: 5.99 },
-      { id: '2', name: 'Hardwood', pricePerSqFt: 8.50 },
-      { id: '3', name: 'Carpet', pricePerSqFt: 3.75 },
-      { id: '4', name: 'Vinyl', pricePerSqFt: 2.99 },
+      { id: '1', name: 'Stone (Example)', pricePerSqFt: 7.50 },
     ]);
     setScale(1);
     setScaleUnit('ft');
