@@ -144,3 +144,93 @@ export function displayUnitToFeet(value: number, unit: string): number {
 export function formatLength(feet: number, unit: string): string {
   return `${feetToDisplayUnit(feet, unit).toFixed(1)}${unit}`;
 }
+
+export interface EdgeLabelSpec {
+  edgeIndex: number;
+  lengthFeet: number;
+  text: string;
+  x: number; // label center, in the same rendered-pixel space as the SVG overlay
+  y: number;
+  angleDeg: number; // rotate the label to read along the edge (never upside down)
+  fontSize: number;
+  width: number; // estimated rendered width of the label chip, at fontSize
+}
+
+const EDGE_LABEL_CHAR_WIDTH = 0.62; // rough width-per-character, relative to font size
+const EDGE_LABEL_PADDING = 6;
+
+// Lays out one length label per polygon edge: sized to fit within its own edge (shrinking
+// down to a minimum, then omitted entirely rather than spilling into a neighboring label) and
+// nudged toward the polygon's interior along the edge's inward normal, so labels on two
+// regions' adjacent/shared edges land on opposite sides of the line instead of colliding.
+// Also rotated to read along the edge (flat on horizontal edges, sideways on vertical ones).
+export function computeEdgeLabels(
+  points: number[],
+  scale: number,
+  scaleUnit: string,
+  renderedWidth: number,
+  opts: { closed?: boolean; baseFontSize?: number; minFontSize?: number; inset?: number } = {}
+): EdgeLabelSpec[] {
+  const closed = opts.closed ?? true;
+  const baseFontSize = opts.baseFontSize ?? 9;
+  const minFontSize = opts.minFontSize ?? 6;
+  const inset = opts.inset ?? 9;
+  const n = points.length / 2;
+  const edgeCount = closed ? n : n - 1;
+  if (edgeCount < 1 || n < 2) return [];
+
+  let cx = 0, cy = 0;
+  for (let i = 0; i < n; i++) {
+    cx += points[i * 2];
+    cy += points[i * 2 + 1];
+  }
+  cx /= n;
+  cy /= n;
+
+  const specs: EdgeLabelSpec[] = [];
+  for (let i = 0; i < edgeCount; i++) {
+    const j = (i + 1) % n;
+    const ax = points[i * 2], ay = points[i * 2 + 1];
+    const bx = points[j * 2], by = points[j * 2 + 1];
+    const dx = bx - ax, dy = by - ay;
+    const edgeLenFrac = Math.sqrt(dx * dx + dy * dy);
+    if (edgeLenFrac === 0) continue;
+
+    const lengthFeet = edgeLenFrac / (scale || 1);
+    const text = formatLength(lengthFeet, scaleUnit);
+
+    const edgePixelLen = edgeLenFrac * renderedWidth;
+    const available = Math.max(0, edgePixelLen - 4);
+    const neededAtBase = text.length * baseFontSize * EDGE_LABEL_CHAR_WIDTH + EDGE_LABEL_PADDING;
+    let fontSize = baseFontSize;
+    if (neededAtBase > available) {
+      const neededAtMin = text.length * minFontSize * EDGE_LABEL_CHAR_WIDTH + EDGE_LABEL_PADDING;
+      if (neededAtMin > available) continue; // wouldn't fit even at the minimum - skip it
+      fontSize = Math.max(minFontSize, (available - EDGE_LABEL_PADDING) / (text.length * EDGE_LABEL_CHAR_WIDTH));
+    }
+    const width = text.length * fontSize * EDGE_LABEL_CHAR_WIDTH + EDGE_LABEL_PADDING;
+
+    const midXf = (ax + bx) / 2, midYf = (ay + by) / 2;
+    let nx = -dy / edgeLenFrac, ny = dx / edgeLenFrac;
+    if (nx * (cx - midXf) + ny * (cy - midYf) < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+
+    let angleDeg = Math.atan2(dy, dx) * 180 / Math.PI;
+    if (angleDeg > 90) angleDeg -= 180;
+    if (angleDeg < -90) angleDeg += 180;
+
+    specs.push({
+      edgeIndex: i,
+      lengthFeet,
+      text,
+      x: midXf * renderedWidth + nx * inset,
+      y: midYf * renderedWidth + ny * inset,
+      angleDeg,
+      fontSize,
+      width,
+    });
+  }
+  return specs;
+}

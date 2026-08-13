@@ -15,8 +15,7 @@ import RegionsList from "./RegionsList";
 import {
   generateRandomColor,
   calculatePolygonArea,
-  polygonEdgeLengthsFeet,
-  formatLength,
+  computeEdgeLabels,
   displayUnitToFeet,
   feetToDisplayUnit,
 } from "@/lib/utils";
@@ -606,38 +605,33 @@ const BlueprintView = () => {
               }}
             />
           ))}
-          {/* Edge length labels - calibrated real-world distance along each side. Clickable
-              (while editing) to type an exact correction if a hand-drawn edge is a bit off. */}
-          {pointsToRender.length >= 6 && polygonEdgeLengthsFeet(pointsToRender, scale).map((lengthFeet, i) => {
-            const n = pointsToRender.length / 2;
-            const j = (i + 1) % n;
-            const midX = ((pointsToRender[i * 2] + pointsToRender[j * 2]) / 2) * renderedWidth;
-            const midY = ((pointsToRender[i * 2 + 1] + pointsToRender[j * 2 + 1]) / 2) * renderedWidth;
-            const label = formatLength(lengthFeet, scaleUnit);
-            const labelWidth = label.length * 5.5 + 6;
-            return (
-              <g
-                key={`edge-${i}`}
-                onClick={isEditing ? e => { e.stopPropagation(); handleEdgeLabelClick(i, lengthFeet); } : undefined}
-                style={{ cursor: isEditing ? "pointer" : "default" }}
-              >
-                <rect
-                  x={midX - labelWidth / 2}
-                  y={midY - 7}
-                  width={labelWidth}
-                  height={14}
-                  rx={3}
-                  fill="#ffffff"
-                  opacity={0.85}
-                  stroke={isEditing ? "#3b82f6" : "none"}
-                  strokeWidth={0.75}
-                />
-                <text x={midX} y={midY + 3} textAnchor="middle" fontSize={9} fill="#111827">
-                  {label}
-                </text>
-              </g>
-            );
-          })}
+          {/* Edge length labels - calibrated real-world distance along each side, inset toward
+              the region's interior (so two regions sharing/close to an edge don't collide) and
+              rotated to read along the edge. Clickable while editing to type an exact
+              correction if a hand-drawn edge is a bit off. */}
+          {pointsToRender.length >= 6 && computeEdgeLabels(pointsToRender, scale, scaleUnit, renderedWidth).map(spec => (
+            <g
+              key={`edge-${spec.edgeIndex}`}
+              transform={`rotate(${spec.angleDeg}, ${spec.x}, ${spec.y})`}
+              onClick={isEditing ? e => { e.stopPropagation(); handleEdgeLabelClick(spec.edgeIndex, spec.lengthFeet); } : undefined}
+              style={{ cursor: isEditing ? "pointer" : "default" }}
+            >
+              <rect
+                x={spec.x - spec.width / 2}
+                y={spec.y - spec.fontSize / 2 - 2}
+                width={spec.width}
+                height={spec.fontSize + 4}
+                rx={2}
+                fill="#ffffff"
+                opacity={0.85}
+                stroke={isEditing ? "#3b82f6" : "none"}
+                strokeWidth={0.75}
+              />
+              <text x={spec.x} y={spec.y + spec.fontSize * 0.32} textAnchor="middle" fontSize={spec.fontSize} fill="#111827">
+                {spec.text}
+              </text>
+            </g>
+          ))}
         </g>
       );
     })
@@ -685,33 +679,21 @@ const BlueprintView = () => {
             strokeWidth={0.7}
           />
         ))}
-        {/* Live length label on each already-placed segment, so a misclick shows up in the
-            number immediately instead of only after the region is finished. */}
-        {Array.from({ length: Math.max(0, currentPoints.length / 2 - 1) }).map((_, i) => {
-          const ax = currentPoints[i * 2], ay = currentPoints[i * 2 + 1];
-          const bx = currentPoints[(i + 1) * 2], by = currentPoints[(i + 1) * 2 + 1];
-          const lengthFeet = Math.sqrt((bx - ax) ** 2 + (by - ay) ** 2) / (scale || 1);
-          const midX = ((ax + bx) / 2) * renderedWidth;
-          const midY = ((ay + by) / 2) * renderedWidth;
-          return (
-            <text key={`seg-${i}`} x={midX} y={midY - 4} textAnchor="middle" fontSize={9} fill="#1e3a8a" opacity={0.85}>
-              {formatLength(lengthFeet, scaleUnit)}
+        {/* Live length label on each already-placed segment (plus the rubber-band segment to
+            the cursor), sized to fit its own segment so short clicks don't overlap. */}
+        {computeEdgeLabels(
+          mousePos ? [...currentPoints, mousePos.x, mousePos.y] : currentPoints,
+          scale,
+          scaleUnit,
+          renderedWidth,
+          { closed: false, baseFontSize: 9, inset: 6 }
+        ).map(spec => (
+          <g key={`seg-${spec.edgeIndex}`} transform={`rotate(${spec.angleDeg}, ${spec.x}, ${spec.y})`}>
+            <text x={spec.x} y={spec.y + spec.fontSize * 0.32} textAnchor="middle" fontSize={spec.fontSize} fill="#1e3a8a" opacity={0.85}>
+              {spec.text}
             </text>
-          );
-        })}
-        {/* Live length label on the rubber-band segment (last point to cursor) */}
-        {mousePos && currentPoints.length >= 2 && (() => {
-          const ax = currentPoints[currentPoints.length - 2];
-          const ay = currentPoints[currentPoints.length - 1];
-          const lengthFeet = Math.sqrt((mousePos.x - ax) ** 2 + (mousePos.y - ay) ** 2) / (scale || 1);
-          const midX = ((ax + mousePos.x) / 2) * renderedWidth;
-          const midY = ((ay + mousePos.y) / 2) * renderedWidth;
-          return (
-            <text x={midX} y={midY - 4} textAnchor="middle" fontSize={9} fill="#1e3a8a" opacity={0.85}>
-              {formatLength(lengthFeet, scaleUnit)}
-            </text>
-          );
-        })()}
+          </g>
+        ))}
       </>
     ) : null
   ), [drawingMode, currentPoints, renderedWidth, mousePos, scale, scaleUnit]);

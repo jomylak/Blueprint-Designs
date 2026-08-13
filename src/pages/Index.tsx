@@ -4,7 +4,6 @@ import EstimationSummary from "@/components/EstimationSummary";
 import MaterialLibrary from "@/components/MaterialLibrary";
 import SavedProjects from "@/components/SavedProjects";
 import Header from "@/components/Header";
-import { Toaster } from "sonner";
 import { useProject } from "@/context/ProjectContext";
 import { Button } from "@/components/ui/button";
 import { Upload } from "lucide-react";
@@ -67,7 +66,6 @@ const Index = () => {
           </TabsContent>
         </Tabs>
       </main>
-      <Toaster position="top-right" />
     </div>
   );
 };
