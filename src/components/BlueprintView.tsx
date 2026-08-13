@@ -203,7 +203,7 @@ const BlueprintView = () => {
   const renderedHeightRef = useRef(renderedHeight);
   renderedHeightRef.current = renderedHeight;
   const rafIdRef = useRef<number | null>(null);
-  const lastTsRef = useRef(0);
+  const lastTsRef = useRef(0); //test
 
   const stepPan = useCallback(() => {
     const now = performance.now();
