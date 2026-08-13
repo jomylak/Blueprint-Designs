@@ -25,6 +25,9 @@ enum DrawingMode {
   Scaling // <-- We'll use this for calibration mode
 }
 
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 5;
+
 const BlueprintView = () => {
   const {
     pdfData,
@@ -123,7 +126,7 @@ const BlueprintView = () => {
   // Zooms toward a specific point (in viewport px) so that point stays fixed on screen -
   // used for both Ctrl/Cmd+scroll (cursor position) and the +/- buttons (viewport center).
   const zoomTo = useCallback((newZoomRaw: number, anchorX: number, anchorY: number) => {
-    const newZoom = Math.min(2, Math.max(0.5, newZoomRaw));
+    const newZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, newZoomRaw));
     if (newZoom === zoom || renderedWidth === 0 || renderedHeight === 0) return;
     const newW = containerWidth * newZoom;
     const newH = pageAspectRatio ? newW / pageAspectRatio : newW * 1.294;
@@ -185,6 +188,87 @@ const BlueprintView = () => {
       window.removeEventListener("mouseup", onUp);
     };
   }, [isPanning, clampPan]);
+
+  // WASD camera panning - needed because while placing region/calibration points, left-click-
+  // drag is reserved for placing points, so the mouse alone can't move the camera mid-draw.
+  // Refs (rather than effect deps) keep the animation loop's closure fresh without having to
+  // tear down and restart the loop every time zoom/pan/size changes.
+  const heldKeysRef = useRef<Set<string>>(new Set());
+  const panRef = useRef(pan);
+  panRef.current = pan;
+  const clampPanRef = useRef(clampPan);
+  clampPanRef.current = clampPan;
+  const renderedWidthRef = useRef(renderedWidth);
+  renderedWidthRef.current = renderedWidth;
+  const renderedHeightRef = useRef(renderedHeight);
+  renderedHeightRef.current = renderedHeight;
+  const rafIdRef = useRef<number | null>(null);
+  const lastTsRef = useRef(0);
+
+  const stepPan = useCallback(() => {
+    const now = performance.now();
+    const dt = (now - lastTsRef.current) / 1000;
+    lastTsRef.current = now;
+    const keys = heldKeysRef.current;
+    const SPEED = 700; // screen px/sec
+    let dx = 0, dy = 0;
+    if (keys.has("a")) dx += SPEED * dt;
+    if (keys.has("d")) dx -= SPEED * dt;
+    if (keys.has("w")) dy += SPEED * dt;
+    if (keys.has("s")) dy -= SPEED * dt;
+    if (dx !== 0 || dy !== 0) {
+      const next = clampPanRef.current(
+        panRef.current.x + dx,
+        panRef.current.y + dy,
+        renderedWidthRef.current,
+        renderedHeightRef.current
+      );
+      panRef.current = next;
+      setPan(next);
+    }
+    if (heldKeysRef.current.size > 0) {
+      rafIdRef.current = requestAnimationFrame(stepPan);
+    } else {
+      rafIdRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!pdfData) return;
+    const isTypingTarget = (el: EventTarget | null) => {
+      const tag = (el as HTMLElement)?.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (isTypingTarget(e.target)) return;
+      const key = e.key.toLowerCase();
+      if (key !== "w" && key !== "a" && key !== "s" && key !== "d") return;
+      e.preventDefault();
+      if (!heldKeysRef.current.has(key)) {
+        heldKeysRef.current.add(key);
+        if (rafIdRef.current === null) {
+          lastTsRef.current = performance.now();
+          rafIdRef.current = requestAnimationFrame(stepPan);
+        }
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      heldKeysRef.current.delete(e.key.toLowerCase());
+    };
+    const onBlur = () => heldKeysRef.current.clear();
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+      heldKeysRef.current.clear();
+      if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    };
+  }, [pdfData, stepPan]);
 
   // Track and restore last viewed page when switching tabs
   useEffect(() => {
@@ -261,6 +345,18 @@ const BlueprintView = () => {
     setDrawingMode(DrawingMode.None);
     setMousePos(null);
     toast.success("Region created successfully");
+  };
+
+  // Right-click undoes the last placed point (to fix a misclick without starting over) - or,
+  // if only one point has been placed so far, cancels the region/calibration entirely.
+  const handleSvgContextMenu = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (drawingMode !== DrawingMode.Drawing && drawingMode !== DrawingMode.Scaling) return;
+    e.preventDefault();
+    if (currentPoints.length <= 2) {
+      cancelDrawing();
+    } else {
+      setCurrentPoints(prev => prev.slice(0, -2));
+    }
   };
 
   // Cancel drawing or calibration
@@ -626,7 +722,7 @@ const BlueprintView = () => {
               <Plus className="h-4 w-4" />
             </Button>
             <span className="text-xs text-muted-foreground hidden lg:inline">
-              (Ctrl/Cmd + scroll to zoom, drag to pan)
+              (Ctrl/Cmd+scroll to zoom, drag or WASD to pan, right-click to undo a point)
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -765,6 +861,7 @@ const BlueprintView = () => {
                     onMouseMove={handleSvgMouseMove}
                     onMouseUp={handleSvgMouseUp}
                     onMouseLeave={handleSvgMouseLeave}
+                    onContextMenu={handleSvgContextMenu}
                   >
                     {renderedRegions}
                     {renderedDrawing}
