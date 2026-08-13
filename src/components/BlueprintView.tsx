@@ -12,7 +12,14 @@ import {
 import { useProject } from "@/context/ProjectContext";
 import { toast } from "sonner";
 import RegionsList from "./RegionsList";
-import { generateRandomColor, calculatePolygonArea } from "@/lib/utils";
+import {
+  generateRandomColor,
+  calculatePolygonArea,
+  polygonEdgeLengthsFeet,
+  formatLength,
+  displayUnitToFeet,
+  feetToDisplayUnit,
+} from "@/lib/utils";
 
 pdfjs.GlobalWorkerOptions.workerSrc = `${import.meta.env.BASE_URL}pdf.worker.mjs`;
 
@@ -38,6 +45,8 @@ const BlueprintView = () => {
     deleteRegion,
     scale,
     setScale,
+    scaleUnit,
+    setScaleUnit,
   } = useProject();
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -61,6 +70,10 @@ const BlueprintView = () => {
   // Live cursor position (zoom-independent, same basis as currentPoints) while drawing a
   // region or calibrating, used to render a rubber-band line to the last placed point.
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
+  // Which edge's length label (of the region currently being edited) has an inline correction
+  // input open - lets the user type an exact measurement to fix a hand-drawn edge that's a bit
+  // off, rather than fighting the mouse for pixel-perfect precision.
+  const [edgeLengthEdit, setEdgeLengthEdit] = useState<{ edgeIndex: number; value: string } | null>(null);
 
   // Track viewport size on mount and window resize (the viewport itself no longer scrolls
   // natively - content is positioned via the `pan` offset instead, see below).
@@ -356,6 +369,7 @@ const BlueprintView = () => {
     else if (calibrationUnit === "m") realDistInFeet = realDist * 3.28084;
     const newScale = pixelDist / realDistInFeet;
     setScale(newScale);
+    setScaleUnit(calibrationUnit);
     setCurrentPoints([]);
     setDrawingMode(DrawingMode.None);
     setCalibrationInput("");
@@ -490,6 +504,7 @@ const BlueprintView = () => {
       setEditingRegionId(null);
       setEditingPoints(null);
       setDraggedPointIdx(null);
+      setEdgeLengthEdit(null);
       toast.success("Region points updated!");
     }
   };
@@ -498,6 +513,50 @@ const BlueprintView = () => {
     setEditingRegionId(null);
     setEditingPoints(null);
     setDraggedPointIdx(null);
+    setEdgeLengthEdit(null);
+  };
+
+  // Opens the inline correction input for one edge of the region currently being edited,
+  // pre-filled with the edge's current length (in the calibrated display unit).
+  const handleEdgeLabelClick = (edgeIndex: number, currentLengthFeet: number) => {
+    setEdgeLengthEdit({
+      edgeIndex,
+      value: feetToDisplayUnit(currentLengthFeet, scaleUnit).toFixed(1),
+    });
+  };
+
+  // Snaps the edge's end point (the second corner in polygon order) along the edge's existing
+  // direction so the edge's real-world length matches exactly what the user typed - fixes a
+  // hand-drawn edge that came out e.g. 0.1ft off without having to redraw the whole region.
+  const commitEdgeLengthEdit = () => {
+    if (!edgeLengthEdit || !editingPoints || !editingRegionId) {
+      setEdgeLengthEdit(null);
+      return;
+    }
+    const typed = parseFloat(edgeLengthEdit.value);
+    if (!typed || typed <= 0) {
+      setEdgeLengthEdit(null);
+      return;
+    }
+    const targetFeet = displayUnitToFeet(typed, scaleUnit);
+    const targetFraction = targetFeet * scale;
+    const n = editingPoints.length / 2;
+    const ai = edgeLengthEdit.edgeIndex;
+    const bi = (ai + 1) % n;
+    const ax = editingPoints[ai * 2], ay = editingPoints[ai * 2 + 1];
+    const bx = editingPoints[bi * 2], by = editingPoints[bi * 2 + 1];
+    const dx = bx - ax, dy = by - ay;
+    const currentFraction = Math.sqrt(dx * dx + dy * dy);
+    if (currentFraction === 0) {
+      setEdgeLengthEdit(null);
+      return;
+    }
+    const factor = targetFraction / currentFraction;
+    const newPoints = [...editingPoints];
+    newPoints[bi * 2] = ax + dx * factor;
+    newPoints[bi * 2 + 1] = ay + dy * factor;
+    setEditingPoints(newPoints);
+    setEdgeLengthEdit(null);
   };
 
   // Memoize region polygons, with edit handles if editing
@@ -547,10 +606,42 @@ const BlueprintView = () => {
               }}
             />
           ))}
+          {/* Edge length labels - calibrated real-world distance along each side. Clickable
+              (while editing) to type an exact correction if a hand-drawn edge is a bit off. */}
+          {pointsToRender.length >= 6 && polygonEdgeLengthsFeet(pointsToRender, scale).map((lengthFeet, i) => {
+            const n = pointsToRender.length / 2;
+            const j = (i + 1) % n;
+            const midX = ((pointsToRender[i * 2] + pointsToRender[j * 2]) / 2) * renderedWidth;
+            const midY = ((pointsToRender[i * 2 + 1] + pointsToRender[j * 2 + 1]) / 2) * renderedWidth;
+            const label = formatLength(lengthFeet, scaleUnit);
+            const labelWidth = label.length * 5.5 + 6;
+            return (
+              <g
+                key={`edge-${i}`}
+                onClick={isEditing ? e => { e.stopPropagation(); handleEdgeLabelClick(i, lengthFeet); } : undefined}
+                style={{ cursor: isEditing ? "pointer" : "default" }}
+              >
+                <rect
+                  x={midX - labelWidth / 2}
+                  y={midY - 7}
+                  width={labelWidth}
+                  height={14}
+                  rx={3}
+                  fill="#ffffff"
+                  opacity={0.85}
+                  stroke={isEditing ? "#3b82f6" : "none"}
+                  strokeWidth={0.75}
+                />
+                <text x={midX} y={midY + 3} textAnchor="middle" fontSize={9} fill="#111827">
+                  {label}
+                </text>
+              </g>
+            );
+          })}
         </g>
       );
     })
-  ), [pageRegions, renderedWidth, selectedRegionId, editingRegionId, editingPoints]);
+  ), [pageRegions, renderedWidth, selectedRegionId, editingRegionId, editingPoints, scale, scaleUnit]);
 
   // Memoize current drawing polyline and points
   const renderedDrawing = useMemo(() => (
@@ -594,9 +685,36 @@ const BlueprintView = () => {
             strokeWidth={0.7}
           />
         ))}
+        {/* Live length label on each already-placed segment, so a misclick shows up in the
+            number immediately instead of only after the region is finished. */}
+        {Array.from({ length: Math.max(0, currentPoints.length / 2 - 1) }).map((_, i) => {
+          const ax = currentPoints[i * 2], ay = currentPoints[i * 2 + 1];
+          const bx = currentPoints[(i + 1) * 2], by = currentPoints[(i + 1) * 2 + 1];
+          const lengthFeet = Math.sqrt((bx - ax) ** 2 + (by - ay) ** 2) / (scale || 1);
+          const midX = ((ax + bx) / 2) * renderedWidth;
+          const midY = ((ay + by) / 2) * renderedWidth;
+          return (
+            <text key={`seg-${i}`} x={midX} y={midY - 4} textAnchor="middle" fontSize={9} fill="#1e3a8a" opacity={0.85}>
+              {formatLength(lengthFeet, scaleUnit)}
+            </text>
+          );
+        })}
+        {/* Live length label on the rubber-band segment (last point to cursor) */}
+        {mousePos && currentPoints.length >= 2 && (() => {
+          const ax = currentPoints[currentPoints.length - 2];
+          const ay = currentPoints[currentPoints.length - 1];
+          const lengthFeet = Math.sqrt((mousePos.x - ax) ** 2 + (mousePos.y - ay) ** 2) / (scale || 1);
+          const midX = ((ax + mousePos.x) / 2) * renderedWidth;
+          const midY = ((ay + mousePos.y) / 2) * renderedWidth;
+          return (
+            <text x={midX} y={midY - 4} textAnchor="middle" fontSize={9} fill="#1e3a8a" opacity={0.85}>
+              {formatLength(lengthFeet, scaleUnit)}
+            </text>
+          );
+        })()}
       </>
     ) : null
-  ), [drawingMode, currentPoints, renderedWidth, mousePos]);
+  ), [drawingMode, currentPoints, renderedWidth, mousePos, scale, scaleUnit]);
 
   // Memoize calibration line/points for overlay
   const renderedCalibration = useMemo(() => (
@@ -840,6 +958,52 @@ const BlueprintView = () => {
                     {renderedDrawing}
                     {renderedCalibration}
                   </svg>
+                  {/* Inline correction input for an edge length - opened by clicking an edge's
+                      label while editing a region's points. */}
+                  {editingRegionId && editingPoints && edgeLengthEdit && (() => {
+                    const n = editingPoints.length / 2;
+                    const ai = edgeLengthEdit.edgeIndex;
+                    const bi = (ai + 1) % n;
+                    const midX = ((editingPoints[ai * 2] + editingPoints[bi * 2]) / 2) * renderedWidth;
+                    const midY = ((editingPoints[ai * 2 + 1] + editingPoints[bi * 2 + 1]) / 2) * renderedWidth;
+                    return (
+                      <div
+                        style={{
+                          position: "absolute",
+                          left: midX,
+                          top: midY,
+                          transform: "translate(-50%, -140%)",
+                          zIndex: 5,
+                          background: "#fff",
+                          border: "1px solid #3b82f6",
+                          borderRadius: 4,
+                          padding: "3px 4px",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 4,
+                          boxShadow: "0 1px 4px rgba(0,0,0,0.25)",
+                        }}
+                        onMouseDown={e => e.stopPropagation()}
+                      >
+                        <input
+                          autoFocus
+                          type="number"
+                          step="0.1"
+                          value={edgeLengthEdit.value}
+                          onChange={e => setEdgeLengthEdit({ ...edgeLengthEdit, value: e.target.value })}
+                          onKeyDown={e => {
+                            if (e.key === "Enter") commitEdgeLengthEdit();
+                            if (e.key === "Escape") setEdgeLengthEdit(null);
+                          }}
+                          style={{ width: 56, fontSize: 12, color: "#000", background: "#fff", border: "1px solid #ccc", borderRadius: 3, padding: "1px 4px" }}
+                        />
+                        <span style={{ fontSize: 11, color: "#374151" }}>{scaleUnit}</span>
+                        <Button size="sm" className="h-6 px-2 py-0" onClick={commitEdgeLengthEdit}>
+                          <CheckIcon className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    );
+                  })()}
                 </div>
               ) : (
                 <div className="flex items-center justify-center h-full">

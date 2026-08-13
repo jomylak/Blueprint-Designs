@@ -17,7 +17,7 @@ import { exportMarkedUpPdf } from "@/lib/exportMarkedUpPdf";
 import { toast } from "sonner";
 
 const EstimationSummary = () => {
-  const { regions, materials, projectName, pdfData } = useProject();
+  const { regions, materials, projectName, pdfData, scale, scaleUnit } = useProject();
   const [exportingPdf, setExportingPdf] = useState(false);
 
   // Calculate totals
@@ -84,7 +84,7 @@ const EstimationSummary = () => {
     }
     setExportingPdf(true);
     try {
-      const bytes = await exportMarkedUpPdf(pdfData, regions, materials, projectName);
+      const bytes = await exportMarkedUpPdf(pdfData, regions, materials, projectName, scale, scaleUnit);
       await saveBytesToFile(bytes, `${projectName || 'project'}_marked_up.pdf`, 'application/pdf', ['pdf']);
     } catch (error) {
       console.error('Error exporting marked-up PDF:', error);

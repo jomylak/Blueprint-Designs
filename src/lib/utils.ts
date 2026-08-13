@@ -91,7 +91,7 @@ export function groupRegionsByPage(regions: RegionLike[], materials: MaterialLik
 export function calculatePolygonArea(points: number[]): number {
   let area = 0;
   const numPoints = points.length / 2;
-  
+
   for (let i = 0, j = numPoints - 1; i < numPoints; j = i++) {
     const x1 = points[i * 2];
     const y1 = points[i * 2 + 1];
@@ -100,7 +100,47 @@ export function calculatePolygonArea(points: number[]): number {
     area += x1 * y2;
     area -= y1 * x2;
   }
-  
+
   area = Math.abs(area) / 2;
   return area;
+}
+
+// Real-world length (in feet) of each edge of a closed polygon, wrapping the last point back
+// to the first. `points` are fraction-of-page-width pairs (see BlueprintView.tsx) and `scale`
+// is fraction-of-width units per foot (set during calibration), so dividing by it directly
+// yields feet - the same convention calculatePolygonArea/scale^2 uses for square feet.
+export function polygonEdgeLengthsFeet(points: number[], scale: number): number[] {
+  const n = points.length / 2;
+  const lengths: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const dx = points[j * 2] - points[i * 2];
+    const dy = points[j * 2 + 1] - points[i * 2 + 1];
+    lengths.push(Math.sqrt(dx * dx + dy * dy) / (scale || 1));
+  }
+  return lengths;
+}
+
+// Converts a real-world length in feet to/from the unit the user calibrated with (ft/in/m/cm).
+// Mirrors the conversion used when calibrating (BlueprintView's handleCalibrationSave).
+export function feetToDisplayUnit(feet: number, unit: string): number {
+  switch (unit) {
+    case "in": return feet * 12;
+    case "m": return feet / 3.28084;
+    case "cm": return feet * 30.48;
+    default: return feet;
+  }
+}
+
+export function displayUnitToFeet(value: number, unit: string): number {
+  switch (unit) {
+    case "in": return value / 12;
+    case "m": return value * 3.28084;
+    case "cm": return value / 30.48;
+    default: return value;
+  }
+}
+
+export function formatLength(feet: number, unit: string): string {
+  return `${feetToDisplayUnit(feet, unit).toFixed(1)}${unit}`;
 }

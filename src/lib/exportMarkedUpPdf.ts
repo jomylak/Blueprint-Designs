@@ -1,5 +1,5 @@
 import { PDFDocument, StandardFonts, rgb, type RGB } from "pdf-lib";
-import { groupRegionsByPage } from "./utils";
+import { groupRegionsByPage, polygonEdgeLengthsFeet, formatLength } from "./utils";
 
 interface Region {
   id: string;
@@ -37,7 +37,9 @@ export async function exportMarkedUpPdf(
   pdfData: Uint8Array,
   regions: Region[],
   materials: Material[],
-  projectName: string
+  projectName: string,
+  scale: number,
+  scaleUnit: string
 ): Promise<Uint8Array> {
   const finalDoc = await PDFDocument.create();
   const font = await finalDoc.embedFont(StandardFonts.Helvetica);
@@ -162,6 +164,34 @@ export async function exportMarkedUpPdf(
           opacity: 0.9,
         });
       }
+
+      // Calibrated real-world length along each edge, on a small white chip - same values
+      // shown in the app while drawing/editing the region.
+      const edgeLengths = polygonEdgeLengthsFeet(region.points, scale);
+      edgeLengths.forEach((lengthFeet, i) => {
+        const a = pts[i];
+        const b = pts[(i + 1) % pts.length];
+        const mx = (a.x + b.x) / 2;
+        const my = (a.y + b.y) / 2;
+        const edgeLabel = formatLength(lengthFeet, scaleUnit);
+        const edgeLabelSize = 7;
+        const edgeLabelWidth = font.widthOfTextAtSize(edgeLabel, edgeLabelSize);
+        blueprintPage.drawRectangle({
+          x: mx - edgeLabelWidth / 2 - 2,
+          y: my - edgeLabelSize / 2 - 1.5,
+          width: edgeLabelWidth + 4,
+          height: edgeLabelSize + 3,
+          color: rgb(1, 1, 1),
+          opacity: 0.8,
+        });
+        blueprintPage.drawText(edgeLabel, {
+          x: mx - edgeLabelWidth / 2,
+          y: my - edgeLabelSize / 2,
+          size: edgeLabelSize,
+          font,
+          color: rgb(0.1, 0.1, 0.4),
+        });
+      });
 
       // Region name label at the polygon's centroid, on a small white chip for legibility
       // over blueprint linework.
