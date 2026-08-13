@@ -3,9 +3,10 @@ import { Button } from "@/components/ui/button";
 import { FileIcon, FolderIcon, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useRef } from "react";
+import { isElectron, openBytesFromFile } from "@/lib/fileIO";
 
 const Header = () => {
-  const { loadPdf, projectName, saveProject, importProject } = useProject();
+  const { loadPdf, projectName, saveProject, importProject, importProjectFromBytes } = useProject();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -17,11 +18,17 @@ const Header = () => {
   };
 
   const handleSave = () => {
+    // saveProject() already shows its own success/error toast for both the native-dialog
+    // (Electron) and local-storage (browser) paths.
     saveProject();
-    toast.success("Project saved successfully");
   };
 
-  const handleImportClick = () => {
+  const handleImportClick = async () => {
+    if (isElectron()) {
+      const bytes = await openBytesFromFile(["json"]);
+      if (bytes) importProjectFromBytes(bytes);
+      return;
+    }
     fileInputRef.current?.click();
   };
 
@@ -44,14 +51,14 @@ const Header = () => {
         </div>
 
         <div className="flex gap-2">
-          <Button 
-            variant="default" 
+          <Button
+            variant="default"
             size="sm"
             onClick={() => document.getElementById('pdf-upload')?.click()}
             className="flex items-center gap-1"
           >
             <Upload className="h-4 w-4" />
-            <span>Add Blueprint</span>
+            <span>New Blueprint</span>
           </Button>
           <input
             id="pdf-upload"

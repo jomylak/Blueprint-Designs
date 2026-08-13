@@ -1,5 +1,5 @@
 
-import { useLocation } from "react-router-dom";
+import { useLocation, Link } from "react-router-dom";
 import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
@@ -20,10 +20,10 @@ const NotFound = () => {
         <h1 className="text-4xl font-bold mb-4 text-foreground">404</h1>
         <p className="text-xl text-muted-foreground mb-6">Blueprint not found</p>
         <Button variant="default" asChild>
-          <a href="/" className="flex items-center gap-2">
+          <Link to="/" className="flex items-center gap-2">
             <ArrowLeft className="h-4 w-4" />
             Return to Estimator
-          </a>
+          </Link>
         </Button>
       </div>
     </div>

@@ -11,11 +11,14 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FileIcon, TableIcon } from "lucide-react";
+import { groupRegionsByPage } from "@/lib/utils";
+import { saveTextToFile, saveBytesToFile } from "@/lib/fileIO";
+import { exportMarkedUpPdf } from "@/lib/exportMarkedUpPdf";
+import { toast } from "sonner";
 
 const EstimationSummary = () => {
-  const { regions, materials, projectName } = useProject();
-  const [sortField, setSortField] = useState<string>('page');
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const { regions, materials, projectName, pdfData } = useProject();
+  const [exportingPdf, setExportingPdf] = useState(false);
 
   // Calculate totals
   const totalArea = regions.reduce((sum, region) => sum + region.area, 0);
@@ -29,7 +32,7 @@ const EstimationSummary = () => {
     const materialRegions = regions.filter(r => r.materialId === material.id);
     const area = materialRegions.reduce((sum, r) => sum + r.area, 0);
     const cost = area * material.pricePerSqFt;
-    
+
     return {
       id: material.id,
       name: material.name,
@@ -40,76 +43,55 @@ const EstimationSummary = () => {
     };
   }).filter(m => m.area > 0);
 
-  const handleSort = (field: string) => {
-    if (sortField === field) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortField(field);
-      setSortDirection('asc');
-    }
-  };
+  const pageGroups = groupRegionsByPage(regions, materials);
 
-  const sortedRegions = [...regions].sort((a, b) => {
-    let comparison = 0;
-    
-    switch (sortField) {
-      case 'page':
-        comparison = a.pageNumber - b.pageNumber;
-        break;
-      case 'area':
-        comparison = a.area - b.area;
-        break;
-      case 'material':
-        const materialA = materials.find(m => m.id === a.materialId)?.name || '';
-        const materialB = materials.find(m => m.id === b.materialId)?.name || '';
-        comparison = materialA.localeCompare(materialB);
-        break;
-      case 'cost':
-        const costA = materials.find(m => m.id === a.materialId)?.pricePerSqFt * a.area || 0;
-        const costB = materials.find(m => m.id === b.materialId)?.pricePerSqFt * b.area || 0;
-        comparison = costA - costB;
-        break;
-      default:
-        comparison = 0;
-    }
-    
-    return sortDirection === 'asc' ? comparison : -comparison;
-  });
-
-  const exportToCSV = () => {
-    // Create CSV content
+  const exportToCSV = async () => {
+    // Create CSV content, grouped by page to match the on-screen breakdown
     const headers = ['Page', 'Region', 'Material', 'Area (sq ft)', 'Price per sq ft', 'Total Cost'];
-    
-    const rows = sortedRegions.map(region => {
-      const material = materials.find(m => m.id === region.materialId);
-      return [
-        region.pageNumber,
-        region.name || `Region ${region.id.slice(-4)}`, // <-- Use region.name if available
-        material ? material.name : 'Unassigned',
-        region.area.toFixed(2),
-        material ? `$${material.pricePerSqFt.toFixed(2)}` : '-',
-        material ? `$${(material.pricePerSqFt * region.area).toFixed(2)}` : '-'
-      ];
+
+    const rows: (string | number)[][] = [];
+    pageGroups.forEach(page => {
+      page.rows.forEach(row => {
+        rows.push([
+          page.pageNumber,
+          row.name,
+          row.materialName,
+          row.area.toFixed(2),
+          row.pricePerSqFt !== null ? `$${row.pricePerSqFt.toFixed(2)}` : '-',
+          row.pricePerSqFt !== null ? `$${row.cost.toFixed(2)}` : '-',
+        ]);
+      });
+      rows.push([`Page ${page.pageNumber} subtotal`, '', '', page.subtotalArea.toFixed(2), '', `$${page.subtotalCost.toFixed(2)}`]);
     });
-    
-    // Add summary row
+
+    // Add grand total row
     rows.push(['', '', 'TOTAL', totalArea.toFixed(2), '', `$${totalCost.toFixed(2)}`]);
-    
+
     const csvContent = [
       headers.join(','),
       ...rows.map(row => row.join(','))
     ].join('\n');
-    
-    // Create download link
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${projectName || 'estimation'}_summary.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+
+    await saveTextToFile(csvContent, `${projectName || 'estimation'}_summary.csv`, 'text/csv', ['csv']);
+  };
+
+  // Builds one PDF: the summary above (grouped by page) as front page(s), followed by the
+  // original blueprint with each region's outline + name burned onto its page.
+  const handleExportMarkedUpPdf = async () => {
+    if (!pdfData) {
+      toast.error('Upload a blueprint PDF first.');
+      return;
+    }
+    setExportingPdf(true);
+    try {
+      const bytes = await exportMarkedUpPdf(pdfData, regions, materials, projectName);
+      await saveBytesToFile(bytes, `${projectName || 'project'}_marked_up.pdf`, 'application/pdf', ['pdf']);
+    } catch (error) {
+      console.error('Error exporting marked-up PDF:', error);
+      toast.error('Failed to export marked-up PDF.');
+    } finally {
+      setExportingPdf(false);
+    }
   };
 
   if (regions.length === 0) {
@@ -128,10 +110,21 @@ const EstimationSummary = () => {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-semibold">Estimation Summary</h2>
-        <Button variant="outline" size="sm" onClick={exportToCSV}>
-          <FileIcon className="h-4 w-4 mr-1" />
-          Export to CSV
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={exportToCSV}>
+            <FileIcon className="h-4 w-4 mr-1" />
+            Export to CSV
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportMarkedUpPdf}
+            disabled={exportingPdf || !pdfData}
+          >
+            <FileIcon className="h-4 w-4 mr-1" />
+            {exportingPdf ? 'Exporting...' : 'Export Marked-Up PDF'}
+          </Button>
+        </div>
       </div>
       
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -197,64 +190,50 @@ const EstimationSummary = () => {
         <CardHeader className="py-4">
           <CardTitle>Detailed Region Breakdown</CardTitle>
         </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead 
-                  className={sortField === 'page' ? 'cursor-pointer underline' : 'cursor-pointer'}
-                  onClick={() => handleSort('page')}
-                >
-                  Page
-                </TableHead>
-                <TableHead>Region</TableHead>
-                <TableHead 
-                  className={sortField === 'material' ? 'cursor-pointer underline' : 'cursor-pointer'}
-                  onClick={() => handleSort('material')}
-                >
-                  Material
-                </TableHead>
-                <TableHead 
-                  className={sortField === 'area' ? 'cursor-pointer underline' : 'cursor-pointer'}
-                  onClick={() => handleSort('area')}
-                >
-                  Area (sq ft)
-                </TableHead>
-                <TableHead>Price per sq ft</TableHead>
-                <TableHead 
-                  className={`text-right ${sortField === 'cost' ? 'cursor-pointer underline' : 'cursor-pointer'}`}
-                  onClick={() => handleSort('cost')}
-                >
-                  Total Cost
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {sortedRegions.map((region) => {
-                const material = materials.find(m => m.id === region.materialId);
-                return (
-                  <TableRow key={region.id}>
-                    <TableCell>{region.pageNumber}</TableCell>
-                    <TableCell>
-                      <div className="flex items-center">
-                        <div 
-                          className="w-3 h-3 rounded-full mr-2" 
-                          style={{ backgroundColor: region.color }}
-                        />
-                        {region.name || `Region ${region.id.slice(-4)}`} {/* <-- Use region.name */}
-                      </div>
-                    </TableCell>
-                    <TableCell>{material ? material.name : 'Unassigned'}</TableCell>
-                    <TableCell>{region.area.toFixed(2)}</TableCell>
-                    <TableCell>{material ? `$${material.pricePerSqFt.toFixed(2)}` : '-'}</TableCell>
-                    <TableCell className="text-right">
-                      {material ? `$${(material.pricePerSqFt * region.area).toFixed(2)}` : '-'}
-                    </TableCell>
+        <CardContent className="space-y-6">
+          {pageGroups.map(page => (
+            <div key={page.pageNumber}>
+              <h4 className="text-sm font-semibold mb-2">Page {page.pageNumber}</h4>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Region</TableHead>
+                    <TableHead>Material</TableHead>
+                    <TableHead>Area (sq ft)</TableHead>
+                    <TableHead>Price per sq ft</TableHead>
+                    <TableHead className="text-right">Total Cost</TableHead>
                   </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
+                </TableHeader>
+                <TableBody>
+                  {page.rows.map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell>
+                        <div className="flex items-center">
+                          <div
+                            className="w-3 h-3 rounded-full mr-2"
+                            style={{ backgroundColor: row.color }}
+                          />
+                          {row.name}
+                        </div>
+                      </TableCell>
+                      <TableCell>{row.materialName}</TableCell>
+                      <TableCell>{row.area.toFixed(2)}</TableCell>
+                      <TableCell>{row.pricePerSqFt !== null ? `$${row.pricePerSqFt.toFixed(2)}` : '-'}</TableCell>
+                      <TableCell className="text-right">
+                        {row.pricePerSqFt !== null ? `$${row.cost.toFixed(2)}` : '-'}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  <TableRow className="font-medium bg-muted/30">
+                    <TableCell colSpan={2}>Page {page.pageNumber} subtotal</TableCell>
+                    <TableCell>{page.subtotalArea.toFixed(2)}</TableCell>
+                    <TableCell />
+                    <TableCell className="text-right">${page.subtotalCost.toFixed(2)}</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
+          ))}
         </CardContent>
       </Card>
     </div>

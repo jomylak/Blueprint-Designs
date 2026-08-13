@@ -22,7 +22,7 @@ const BlueprintPlaceholder = () => {
         className="flex items-center gap-2"
       >
         <Upload className="h-4 w-4" />
-        Add Blueprint PDF
+        New Blueprint
       </Button>
     </div>
   );
@@ -56,17 +56,17 @@ const Index = () => {
             <TabsTrigger value="estimation">Estimation Summary</TabsTrigger>
             <TabsTrigger value="materials">Material Library</TabsTrigger>
           </TabsList>
-          <TabsContent value="blueprint">
+          <TabsContent value="blueprint" forceMount className="data-[state=inactive]:hidden">
             <div className="flex gap-6 h-full">
               <div className="flex-1 min-w-0">
                 <BlueprintViewWrapper />
               </div>
             </div>
           </TabsContent>
-          <TabsContent value="estimation">
+          <TabsContent value="estimation" forceMount className="data-[state=inactive]:hidden">
             <EstimationSummary />
           </TabsContent>
-          <TabsContent value="materials">
+          <TabsContent value="materials" forceMount className="data-[state=inactive]:hidden">
             <MaterialLibrary />
           </TabsContent>
         </Tabs>

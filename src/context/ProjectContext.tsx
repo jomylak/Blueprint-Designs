@@ -1,5 +1,7 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback } from 'react';
 import { toast } from "sonner";
+import { calculatePolygonArea } from "@/lib/utils";
+import { uint8ToBase64, base64ToUint8, isElectron, saveTextToFile } from "@/lib/fileIO";
 
 interface Material {
   id: string;
@@ -38,9 +40,10 @@ interface ProjectContextType {
   addMaterial: (material: Omit<Material, 'id'>) => void;
   updateMaterial: (id: string, updates: Partial<Material>) => void;
   deleteMaterial: (id: string) => void;
-  saveProject: () => void;
+  saveProject: () => Promise<boolean>;
   loadProject: (data: any) => void;
   importProject: (file: File) => void;
+  importProjectFromBytes: (bytes: Uint8Array) => void;
 }
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
@@ -49,7 +52,7 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
   const [pdfData, setPdfData] = useState<Uint8Array | null>(null);
   const [pageCount, setPageCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
-  const [scale, setScale] = useState(1);
+  const [scale, setScaleState] = useState(1);
   const [scaleUnit, setScaleUnit] = useState('ft');
   const [regions, setRegions] = useState<Region[]>([]);
   const [projectName, setProjectName] = useState('');
@@ -59,6 +62,16 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
     { id: '3', name: 'Carpet', pricePerSqFt: 3.75 },
     { id: '4', name: 'Vinyl', pricePerSqFt: 2.99 },
   ]);
+
+  // Changing scale re-derives every existing region's area from its raw (zoom-independent)
+  // points, so recalibrating after regions are already drawn keeps their sq ft in sync.
+  const setScale = useCallback((newScale: number) => {
+    setScaleState(newScale);
+    setRegions(prev => prev.map(region => ({
+      ...region,
+      area: parseFloat((calculatePolygonArea(region.points) / (newScale * newScale)).toFixed(2)),
+    })));
+  }, []);
 
   // Only set the PDF data and reset state
   const loadPdf = async (file: File) => {
@@ -140,27 +153,7 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
     }, 0);
   }, [regions, materials]);
 
-  // Helper functions for PDF <-> base64
-  function uint8ToBase64(uint8: Uint8Array) {
-    // Use chunked conversion to avoid call stack overflow for large PDFs
-    let binary = '';
-    const chunkSize = 0x8000;
-    for (let i = 0; i < uint8.length; i += chunkSize) {
-      binary += String.fromCharCode.apply(
-        null,
-        uint8.subarray(i, i + chunkSize) as any
-      );
-    }
-    return btoa(binary);
-  }
-  function base64ToUint8(base64: string) {
-    const binary = atob(base64);
-    const uint8 = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) uint8[i] = binary.charCodeAt(i);
-    return uint8;
-  }
-
-  const saveProject = useCallback(() => {
+  const saveProject = useCallback(async () => {
     try {
       // Convert pdfData to base64 for storage
       const pdfBase64 = pdfData ? uint8ToBase64(pdfData) : null;
@@ -183,7 +176,8 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
         }
       };
 
-      // Save to localStorage (as a list of projects)
+      // Save to localStorage (as a list of projects) - this is what powers the in-app
+      // Saved Projects list and the "reopen last project" behavior on launch.
       const projectsJson = localStorage.getItem('builderEstimationProjects');
       let projects = [];
       try {
@@ -208,30 +202,45 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
       } else {
         testProjects.push(savedProject);
       }
-      const estimatedSize = estimateSize(testProjects);
+      const fitsInLocalStorage = estimateSize(testProjects) <= 5 * 1024 * 1024;
 
-      // 5MB = 5 * 1024 * 1024 = 5242880 bytes (most browsers)
-      if (estimatedSize > 5 * 1024 * 1024) {
-        // Offer user to download the project as a file instead
-        toast.error('Project is too large for browser storage. Downloading as file instead.');
-        const blob = new Blob([JSON.stringify(savedProject)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${projectName || 'project'}.json`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+      if (fitsInLocalStorage) {
+        if (existingIndex >= 0) {
+          projects[existingIndex] = savedProject;
+        } else {
+          projects.push(savedProject);
+        }
+        localStorage.setItem('builderEstimationProjects', JSON.stringify(projects));
+      }
+
+      if (isElectron()) {
+        // Native "Save As" - the user picks/creates the folder themselves, and this isn't
+        // limited by the browser storage quota the way localStorage is.
+        const saved = await saveTextToFile(
+          JSON.stringify(projectData, null, 2),
+          `${projectName || 'project'}.json`,
+          'application/json',
+          ['json']
+        );
+        if (saved) {
+          toast.success('Project saved!');
+          return true;
+        }
+        if (fitsInLocalStorage) {
+          toast.success('Project saved (kept a local copy since the file dialog was canceled).');
+          return true;
+        }
+        toast.error('Save canceled, and the project is too large to keep only in local storage.');
         return false;
       }
 
-      if (existingIndex >= 0) {
-        projects[existingIndex] = savedProject;
-      } else {
-        projects.push(savedProject);
+      if (!fitsInLocalStorage) {
+        // Browser (no native dialog available): offer a plain download instead.
+        toast.error('Project is too large for browser storage. Downloading as file instead.');
+        await saveTextToFile(JSON.stringify(savedProject), `${projectName || 'project'}.json`, 'application/json', ['json']);
+        return false;
       }
-      localStorage.setItem('builderEstimationProjects', JSON.stringify(projects));
+
       toast.success('Project saved!');
       return true;
     } catch (error) {
@@ -289,16 +298,17 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
     reader.readAsText(file);
   }, [loadProject]);
 
-  // Load last project from localStorage on initial render
-  useEffect(() => {
+  // Import project from raw bytes (used by the native Electron "Open" dialog, which returns
+  // file contents directly rather than a browser File object).
+  const importProjectFromBytes = useCallback((bytes: Uint8Array) => {
     try {
-      const savedProject = localStorage.getItem('builderEstimationProject');
-      if (savedProject) {
-        const projectData = JSON.parse(savedProject);
-        loadProject(projectData);
-      }
+      const text = new TextDecoder().decode(bytes);
+      const imported = JSON.parse(text);
+      const projectData = imported.data || imported;
+      loadProject(projectData);
+      toast.success('Project imported successfully!');
     } catch (error) {
-      console.error('Error loading saved project:', error);
+      toast.error('Failed to import project: Invalid file.');
     }
   }, [loadProject]);
 
@@ -328,6 +338,7 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
         saveProject,
         loadProject,
         importProject, // <-- add to context
+        importProjectFromBytes,
       }}
     >
       {children}

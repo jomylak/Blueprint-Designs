@@ -1,73 +1,41 @@
-# Welcome to your Lovable project
+# Blueprint Designs
 
-## Project info
+A desktop tool for taking off material quantities from blueprint PDFs and generating cost estimates.
 
-**URL**: https://lovable.dev/projects/affd7eda-2883-4d74-8bbb-9120fc14a753
+Upload a PDF blueprint, calibrate the scale against a known real-world distance, trace out regions (rooms/areas) on each page, assign a material and price per square foot to each region, and get a live cost estimate with a CSV export.
 
-## How can I edit this code?
+## Tech stack
 
-There are several ways of editing your application.
+- Vite + React + TypeScript
+- shadcn/ui (Radix primitives) + Tailwind CSS
+- react-pdf / pdf.js for blueprint rendering
+- Electron (via Electron Forge) for the desktop app shell
 
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/affd7eda-2883-4d74-8bbb-9120fc14a753) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
+## Development
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+npm install
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+This starts the Vite dev server at http://localhost:8080.
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## Running as a desktop app
 
-**Use GitHub Codespaces**
+```sh
+npm run electron
+```
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+This builds the app and launches it in Electron, loading the build output directly from disk (no dev server / hosting required).
 
-## What technologies are used for this project?
+## Packaging a distributable
 
-This project is built with:
+```sh
+npm run make
+```
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+Uses Electron Forge to produce installers/packages for the current platform (see `forge.config.js`).
 
-## How can I deploy this project?
+## Project data
 
-Simply open [Lovable](https://lovable.dev/projects/affd7eda-2883-4d74-8bbb-9120fc14a753) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
+Projects (including the uploaded PDF) are saved to the browser's/Electron's local storage. You can also export a project to a `.json` file and re-import it later from the header controls.

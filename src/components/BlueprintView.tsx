@@ -13,11 +13,11 @@ import {
 import { useProject } from "@/context/ProjectContext";
 import { toast } from "sonner";
 import RegionsList from "./RegionsList";
-import { generateRandomColor } from "@/lib/utils";
+import { generateRandomColor, calculatePolygonArea } from "@/lib/utils";
 import { useLocation } from "react-router-dom";
 import { nanoid } from "nanoid";
 
-pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.mjs";
+pdfjs.GlobalWorkerOptions.workerSrc = `${import.meta.env.BASE_URL}pdf.worker.mjs`;
 
 enum DrawingMode {
   None,
@@ -42,7 +42,7 @@ const BlueprintView = () => {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(800);
-  const [containerHeight, setContainerHeight] = useState(600);
+  const [pageAspectRatio, setPageAspectRatio] = useState<number | null>(null);
   const [drawingMode, setDrawingMode] = useState<DrawingMode>(DrawingMode.None);
   const [currentPoints, setCurrentPoints] = useState<number[]>([]);
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
@@ -52,13 +52,16 @@ const BlueprintView = () => {
   const [editingRegionId, setEditingRegionId] = useState<string | null>(null);
   const [editingPoints, setEditingPoints] = useState<number[] | null>(null);
   const [draggedPointIdx, setDraggedPointIdx] = useState<number | null>(null);
+  // Live cursor position (zoom-independent, same basis as currentPoints) while drawing a
+  // region or calibrating, used to render a rubber-band line to the last placed point.
+  const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
 
-  // Only update container size on mount and window resize
+  // Only update container width on mount and window resize (height now follows the PDF's
+  // own aspect ratio instead of a fixed/measured value, see renderedHeight below).
   useEffect(() => {
     const updateDimensions = () => {
       if (containerRef.current) {
-        setContainerWidth(containerRef.current.offsetWidth);
-        setContainerHeight(containerRef.current.offsetHeight || window.innerHeight * 0.7);
+        setContainerWidth(containerRef.current.clientWidth);
       }
     };
     window.addEventListener("resize", updateDimensions);
@@ -66,13 +69,34 @@ const BlueprintView = () => {
     return () => window.removeEventListener("resize", updateDimensions);
   }, []); // <-- Only run once on mount
 
+  // Let Ctrl/Cmd + scroll wheel zoom in/out. React's onWheel is passive by default so it
+  // can't preventDefault - a native listener is needed to stop the page from scrolling too.
+  // A plain scroll (no modifier) still pans the container normally.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      setZoom(prev => Math.min(2, Math.max(0.5, prev - e.deltaY * 0.0015)));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
   // Only reset page when a new PDF is loaded (do not reset on tab switch)
   useEffect(() => {
     if (pdfData && currentPage === 0) {
       setCurrentPage(1);
     }
+    setPageAspectRatio(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfData]);
+
+  // Rendered size of the current page including zoom - used for the overlay SVG and the
+  // scroll container so nothing is silently clipped, and so click coordinates map correctly.
+  const renderedWidth = containerWidth * zoom;
+  const renderedHeight = pageAspectRatio ? renderedWidth / pageAspectRatio : renderedWidth * 1.294;
 
   // Track and restore last viewed page when switching tabs
   useEffect(() => {
@@ -103,7 +127,11 @@ const BlueprintView = () => {
       const ctm = svg.getScreenCTM();
       if (!ctm) return;
       const cursorpt = pt.matrixTransform(ctm.inverse());
-      setCurrentPoints(prev => [...prev, cursorpt.x, cursorpt.y]);
+      // Store as a fraction of the rendered page width, independent of both zoom AND the
+      // window/container size, so points stay aligned to the blueprint no matter what zoom
+      // level or window size they were captured at; render layers multiply back by the
+      // current renderedWidth to project to screen space.
+      setCurrentPoints(prev => [...prev, cursorpt.x / renderedWidth, cursorpt.y / renderedWidth]);
       return;
     }
     if (drawingMode !== DrawingMode.Drawing) return;
@@ -118,7 +146,8 @@ const BlueprintView = () => {
       const ctm = svg.getScreenCTM();
       if (!ctm) return prevPoints;
       const cursorpt = pt.matrixTransform(ctm.inverse());
-      return [...prevPoints, cursorpt.x, cursorpt.y];
+      // See note above: fraction-of-width so regions don't drift with zoom or window size.
+      return [...prevPoints, cursorpt.x / renderedWidth, cursorpt.y / renderedWidth];
     });
   };
 
@@ -142,6 +171,7 @@ const BlueprintView = () => {
     });
     setCurrentPoints([]);
     setDrawingMode(DrawingMode.None);
+    setMousePos(null);
     toast.success("Region created successfully");
   };
 
@@ -151,6 +181,7 @@ const BlueprintView = () => {
     setDrawingMode(DrawingMode.None);
     setCalibrationInput("");
     setCalibrationUnit("ft");
+    setMousePos(null);
   };
 
   // Calibration helpers
@@ -178,22 +209,8 @@ const BlueprintView = () => {
     setDrawingMode(DrawingMode.None);
     setCalibrationInput("");
     setCalibrationUnit("ft");
+    setMousePos(null);
     toast.success("Scale calibrated!");
-  };
-
-  const calculatePolygonArea = (points: number[]): number => {
-    let area = 0;
-    const numPoints = points.length / 2;
-    for (let i = 0, j = numPoints - 1; i < numPoints; j = i++) {
-      const x1 = points[i * 2];
-      const y1 = points[i * 2 + 1];
-      const x2 = points[j * 2];
-      const y2 = points[j * 2 + 1];
-      area += x1 * y2;
-      area -= y1 * x2;
-    }
-    area = Math.abs(area) / 2;
-    return area;
   };
 
   const handleDeleteRegion = (id: string) => {
@@ -221,6 +238,13 @@ const BlueprintView = () => {
     [setPageCount]
   );
 
+  // Keep the Document's `file` prop referentially stable so react-pdf doesn't re-parse the
+  // whole PDF (and flash blank) on every zoom/page change - only when the bytes actually change.
+  const pdfFile = useMemo(
+    () => (pdfData ? { data: new Uint8Array(pdfData) } : undefined),
+    [pdfData]
+  );
+
   // Memoize the PDF Document/Page layer so it only re-renders when pdfData, currentPage, zoom, or container size changes
   const renderedPdf = useMemo(() => (
     <div
@@ -239,21 +263,22 @@ const BlueprintView = () => {
       }}
     >
       <Document
-        file={pdfData ? { data: new Uint8Array(pdfData) } : undefined}
+        file={pdfFile}
         onLoadSuccess={handleLoadSuccess}
         loading={<div>Loading PDF...</div>}
         error={<div>Failed to load PDF.</div>}
       >
         <Page
           pageNumber={currentPage}
-          width={containerWidth * zoom}
+          width={renderedWidth}
           renderAnnotationLayer={false}
           renderTextLayer={false}
           renderMode={"svg" as any}
+          onLoadSuccess={(page: any) => setPageAspectRatio(page.width / page.height)}
         />
       </Document>
     </div>
-  ), [pdfData, currentPage, containerWidth, zoom, handleLoadSuccess]);
+  ), [pdfFile, currentPage, renderedWidth, handleLoadSuccess]);
 
   // Move these function declarations above renderedRegions so they are defined before use
   const handleRegionEdit = (regionId: string) => {
@@ -270,9 +295,10 @@ const BlueprintView = () => {
   };
 
   const handleSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const svg = e.currentTarget;
+    if (typeof svg.createSVGPoint !== "function") return;
+
     if (editingRegionId && editingPoints && draggedPointIdx !== null) {
-      const svg = e.currentTarget;
-      if (typeof svg.createSVGPoint !== "function") return;
       const pt = svg.createSVGPoint();
       pt.x = e.clientX;
       pt.y = e.clientY;
@@ -280,10 +306,27 @@ const BlueprintView = () => {
       if (!ctm) return;
       const cursorpt = pt.matrixTransform(ctm.inverse());
       const newPoints = [...editingPoints];
-      newPoints[draggedPointIdx] = cursorpt.x;
-      newPoints[draggedPointIdx + 1] = cursorpt.y;
+      // editingPoints (seeded from region.points) uses the same fraction-of-width basis.
+      newPoints[draggedPointIdx] = cursorpt.x / renderedWidth;
+      newPoints[draggedPointIdx + 1] = cursorpt.y / renderedWidth;
       setEditingPoints(newPoints);
+      return;
     }
+
+    if (drawingMode === DrawingMode.Drawing || drawingMode === DrawingMode.Scaling) {
+      const pt = svg.createSVGPoint();
+      pt.x = e.clientX;
+      pt.y = e.clientY;
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return;
+      const cursorpt = pt.matrixTransform(ctm.inverse());
+      setMousePos({ x: cursorpt.x / renderedWidth, y: cursorpt.y / renderedWidth });
+    }
+  };
+
+  const handleSvgMouseLeave = () => {
+    setDraggedPointIdx(null);
+    setMousePos(null);
   };
 
   const handleSvgMouseUp = () => {
@@ -316,7 +359,7 @@ const BlueprintView = () => {
           <polygon
             points={pointsToRender.map((p, i) =>
               i % 2 === 0
-                ? `${pointsToRender[i] * zoom},${pointsToRender[i + 1] * zoom}`
+                ? `${pointsToRender[i] * renderedWidth},${pointsToRender[i + 1] * renderedWidth}`
                 : null
             ).filter(Boolean).join(" ")}
             fill={region.color + "80"}
@@ -335,8 +378,8 @@ const BlueprintView = () => {
           {isEditing && pointsToRender.length >= 2 && Array.from({ length: pointsToRender.length / 2 }).map((_, i) => (
             <circle
               key={i}
-              cx={pointsToRender[i * 2] * zoom}
-              cy={pointsToRender[i * 2 + 1] * zoom}
+              cx={pointsToRender[i * 2] * renderedWidth}
+              cy={pointsToRender[i * 2 + 1] * renderedWidth}
               r={1}
               fill="#3b82f6"
               opacity={0.5}
@@ -352,7 +395,7 @@ const BlueprintView = () => {
         </g>
       );
     })
-  ), [pageRegions, zoom, selectedRegionId, editingRegionId, editingPoints]);
+  ), [pageRegions, renderedWidth, selectedRegionId, editingRegionId, editingPoints]);
 
   // Memoize current drawing polyline and points
   const renderedDrawing = useMemo(() => (
@@ -362,7 +405,7 @@ const BlueprintView = () => {
           // Thinner, more transparent line for accuracy
           points={currentPoints.map((p, i) =>
             i % 2 === 0
-              ? `${currentPoints[i] * zoom},${currentPoints[i + 1] * zoom}`
+              ? `${currentPoints[i] * renderedWidth},${currentPoints[i + 1] * renderedWidth}`
               : null
           ).filter(Boolean).join(" ")}
           fill="none"
@@ -371,11 +414,24 @@ const BlueprintView = () => {
           strokeDasharray="3,3"
           opacity={0.7}
         />
+        {/* Rubber-band line from the last placed point to the cursor, to help line up the next click */}
+        {mousePos && (
+          <line
+            x1={currentPoints[currentPoints.length - 2] * renderedWidth}
+            y1={currentPoints[currentPoints.length - 1] * renderedWidth}
+            x2={mousePos.x * renderedWidth}
+            y2={mousePos.y * renderedWidth}
+            stroke="#3b82f6"
+            strokeWidth={1}
+            strokeDasharray="3,3"
+            opacity={0.5}
+          />
+        )}
         {Array.from({ length: currentPoints.length / 2 }).map((_, i) => (
           <circle
             key={i}
-            cx={currentPoints[i * 2] * zoom}
-            cy={currentPoints[i * 2 + 1] * zoom}
+            cx={currentPoints[i * 2] * renderedWidth}
+            cy={currentPoints[i * 2 + 1] * renderedWidth}
             r={2.5}
             fill="#3b82f6"
             opacity={0.6}
@@ -385,7 +441,7 @@ const BlueprintView = () => {
         ))}
       </>
     ) : null
-  ), [drawingMode, currentPoints, zoom]);
+  ), [drawingMode, currentPoints, renderedWidth, mousePos]);
 
   // Memoize calibration line/points for overlay
   const renderedCalibration = useMemo(() => (
@@ -393,18 +449,31 @@ const BlueprintView = () => {
       <>
         {currentPoints.length === 4 && (
           <line
-            x1={currentPoints[0]}
-            y1={currentPoints[1]}
-            x2={currentPoints[2]}
-            y2={currentPoints[3]}
+            x1={currentPoints[0] * renderedWidth}
+            y1={currentPoints[1] * renderedWidth}
+            x2={currentPoints[2] * renderedWidth}
+            y2={currentPoints[3] * renderedWidth}
             stroke="#f59e42"
             strokeWidth={1}
             opacity={0.7}
           />
         )}
+        {/* Rubber-band line to the cursor while placing the second calibration point */}
+        {currentPoints.length === 2 && mousePos && (
+          <line
+            x1={currentPoints[0] * renderedWidth}
+            y1={currentPoints[1] * renderedWidth}
+            x2={mousePos.x * renderedWidth}
+            y2={mousePos.y * renderedWidth}
+            stroke="#f59e42"
+            strokeWidth={1}
+            strokeDasharray="3,3"
+            opacity={0.5}
+          />
+        )}
         <circle
-          cx={currentPoints[0]}
-          cy={currentPoints[1]}
+          cx={currentPoints[0] * renderedWidth}
+          cy={currentPoints[1] * renderedWidth}
           r={2.5}
           fill="#f59e42"
           opacity={0.6}
@@ -413,8 +482,8 @@ const BlueprintView = () => {
         />
         {currentPoints.length === 4 && (
           <circle
-            cx={currentPoints[2]}
-            cy={currentPoints[3]}
+            cx={currentPoints[2] * renderedWidth}
+            cy={currentPoints[3] * renderedWidth}
             r={2.5}
             fill="#f59e42"
             opacity={0.6}
@@ -424,7 +493,7 @@ const BlueprintView = () => {
         )}
       </>
     ) : null
-  ), [drawingMode, currentPoints]);
+  ), [drawingMode, currentPoints, renderedWidth, mousePos]);
 
   return (
     <div className="flex flex-col gap-4 h-full">
@@ -468,6 +537,9 @@ const BlueprintView = () => {
             >
               <Plus className="h-4 w-4" />
             </Button>
+            <span className="text-xs text-muted-foreground hidden lg:inline">
+              (Ctrl/Cmd + scroll to zoom)
+            </span>
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -560,17 +632,24 @@ const BlueprintView = () => {
           <CardContent className="p-4">
             <div
               ref={containerRef}
-              className="relative border border-border rounded-md overflow-hidden w-full h-full"
-              style={{ minHeight: 400, height: `${containerHeight}px` }}
+              className="relative border border-border rounded-md overflow-auto w-full"
+              style={{ minHeight: 400, maxHeight: "75vh" }}
             >
               {pdfData ? (
-                <div style={{ width: "100%", height: "100%", position: "relative" }}>
+                <div
+                  style={{
+                    width: renderedWidth,
+                    height: renderedHeight,
+                    position: "relative",
+                    margin: "0 auto",
+                  }}
+                >
                   {/* PDF Layer (memoized, only re-renders on page/zoom/size change) */}
                   {renderedPdf}
                   {/* SVG Overlay */}
                   <svg
-                    width={containerWidth}
-                    height={containerHeight}
+                    width={renderedWidth}
+                    height={renderedHeight}
                     style={{
                       position: "absolute",
                       left: 0,
@@ -581,7 +660,7 @@ const BlueprintView = () => {
                     onClick={handleSvgClick}
                     onMouseMove={handleSvgMouseMove}
                     onMouseUp={handleSvgMouseUp}
-                    onMouseLeave={handleSvgMouseUp}
+                    onMouseLeave={handleSvgMouseLeave}
                   >
                     {renderedRegions}
                     {renderedDrawing}
@@ -589,7 +668,7 @@ const BlueprintView = () => {
                   </svg>
                 </div>
               ) : (
-                <div className="flex items-center justify-center h-full bg-muted">
+                <div className="flex items-center justify-center h-[400px] bg-muted">
                   <p className="text-muted-foreground">
                     Upload a blueprint PDF to get started
                   </p>

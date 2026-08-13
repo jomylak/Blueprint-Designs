@@ -25,6 +25,68 @@ export function generateRandomColor(): string {
   return colors[Math.floor(Math.random() * colors.length)];
 }
 
+interface RegionLike {
+  id: string;
+  name: string;
+  pageNumber: number;
+  materialId: string | null;
+  area: number;
+  color: string;
+}
+
+interface MaterialLike {
+  id: string;
+  name: string;
+  pricePerSqFt: number;
+}
+
+export interface RegionSummaryRow {
+  id: string;
+  name: string;
+  color: string;
+  materialName: string;
+  pricePerSqFt: number | null;
+  area: number;
+  cost: number;
+}
+
+export interface PageSummaryGroup {
+  pageNumber: number;
+  rows: RegionSummaryRow[];
+  subtotalArea: number;
+  subtotalCost: number;
+}
+
+// Group regions by blueprint page for the Estimation Summary view and the exported PDF's
+// summary pages, so both stay in sync with a single source of truth.
+export function groupRegionsByPage(regions: RegionLike[], materials: MaterialLike[]): PageSummaryGroup[] {
+  const byPage = new Map<number, RegionSummaryRow[]>();
+
+  for (const region of regions) {
+    const material = materials.find(m => m.id === region.materialId) || null;
+    const row: RegionSummaryRow = {
+      id: region.id,
+      name: region.name || `Region ${region.id.slice(-4)}`,
+      color: region.color,
+      materialName: material ? material.name : "Unassigned",
+      pricePerSqFt: material ? material.pricePerSqFt : null,
+      area: region.area,
+      cost: material ? material.pricePerSqFt * region.area : 0,
+    };
+    if (!byPage.has(region.pageNumber)) byPage.set(region.pageNumber, []);
+    byPage.get(region.pageNumber)!.push(row);
+  }
+
+  return Array.from(byPage.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([pageNumber, rows]) => ({
+      pageNumber,
+      rows,
+      subtotalArea: rows.reduce((sum, r) => sum + r.area, 0),
+      subtotalCost: rows.reduce((sum, r) => sum + r.cost, 0),
+    }));
+}
+
 // Calculate polygon area using Shoelace formula
 export function calculatePolygonArea(points: number[]): number {
   let area = 0;
