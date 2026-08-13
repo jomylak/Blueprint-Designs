@@ -234,14 +234,11 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
         return false;
       }
 
-      if (!fitsInLocalStorage) {
-        // Browser (no native dialog available): offer a plain download instead.
-        toast.error('Project is too large for browser storage. Downloading as file instead.');
-        await saveTextToFile(JSON.stringify(savedProject), `${projectName || 'project'}.json`, 'application/json', ['json']);
-        return false;
-      }
-
-      toast.success('Project saved!');
+      // Browser (no native Save As dialog available): always download a real .json file so
+      // there's an actual file the user can find/share, in addition to the localStorage copy
+      // that powers the in-app Saved Projects list (when it fits).
+      await saveTextToFile(JSON.stringify(projectData, null, 2), `${projectName || 'project'}.json`, 'application/json', ['json']);
+      toast.success(fitsInLocalStorage ? 'Project saved and downloaded!' : 'Project downloaded (too large for browser storage).');
       return true;
     } catch (error) {
       console.error('Error saving project:', error);

@@ -49,24 +49,20 @@ const Index = () => {
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
       <Header />
-      <main className="flex-1 container mx-auto py-4 px-2 md:px-6">
+      <main className="flex-1 w-full py-4 px-2 md:px-4">
         <Tabs defaultValue="blueprint" className="w-full">
-          <TabsList className="grid grid-cols-3 mb-6">
+          <TabsList className="grid grid-cols-3 mb-4 max-w-xl">
             <TabsTrigger value="blueprint">Blueprint View</TabsTrigger>
             <TabsTrigger value="estimation">Estimation Summary</TabsTrigger>
             <TabsTrigger value="materials">Material Library</TabsTrigger>
           </TabsList>
           <TabsContent value="blueprint" forceMount className="data-[state=inactive]:hidden">
-            <div className="flex gap-6 h-full">
-              <div className="flex-1 min-w-0">
-                <BlueprintViewWrapper />
-              </div>
-            </div>
+            <BlueprintViewWrapper />
           </TabsContent>
-          <TabsContent value="estimation" forceMount className="data-[state=inactive]:hidden">
+          <TabsContent value="estimation" forceMount className="data-[state=inactive]:hidden max-w-5xl mx-auto">
             <EstimationSummary />
           </TabsContent>
-          <TabsContent value="materials" forceMount className="data-[state=inactive]:hidden">
+          <TabsContent value="materials" forceMount className="data-[state=inactive]:hidden max-w-3xl mx-auto">
             <MaterialLibrary />
           </TabsContent>
         </Tabs>

@@ -42,11 +42,17 @@ const BlueprintView = () => {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(800);
+  const [containerHeight, setContainerHeight] = useState(500);
   const [pageAspectRatio, setPageAspectRatio] = useState<number | null>(null);
   const [drawingMode, setDrawingMode] = useState<DrawingMode>(DrawingMode.None);
   const [currentPoints, setCurrentPoints] = useState<number[]>([]);
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
+  // Canvas pan offset (in screen px) applied to the content layer, like a whiteboard app -
+  // lets the user drag the page around, especially useful when zoomed in past the viewport.
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const panStartRef = useRef<{ mouseX: number; mouseY: number; panX: number; panY: number; w: number; h: number } | null>(null);
   const [calibrationInput, setCalibrationInput] = useState("");
   const [calibrationUnit, setCalibrationUnit] = useState("ft");
   const [editingRegionId, setEditingRegionId] = useState<string | null>(null);
@@ -56,33 +62,19 @@ const BlueprintView = () => {
   // region or calibrating, used to render a rubber-band line to the last placed point.
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
 
-  // Only update container width on mount and window resize (height now follows the PDF's
-  // own aspect ratio instead of a fixed/measured value, see renderedHeight below).
+  // Track viewport size on mount and window resize (the viewport itself no longer scrolls
+  // natively - content is positioned via the `pan` offset instead, see below).
   useEffect(() => {
     const updateDimensions = () => {
       if (containerRef.current) {
         setContainerWidth(containerRef.current.clientWidth);
+        setContainerHeight(containerRef.current.clientHeight);
       }
     };
     window.addEventListener("resize", updateDimensions);
     updateDimensions();
     return () => window.removeEventListener("resize", updateDimensions);
   }, []); // <-- Only run once on mount
-
-  // Let Ctrl/Cmd + scroll wheel zoom in/out. React's onWheel is passive by default so it
-  // can't preventDefault - a native listener is needed to stop the page from scrolling too.
-  // A plain scroll (no modifier) still pans the container normally.
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      e.preventDefault();
-      setZoom(prev => Math.min(2, Math.max(0.5, prev - e.deltaY * 0.0015)));
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, []);
 
   // Only reset page when a new PDF is loaded (do not reset on tab switch)
   useEffect(() => {
@@ -93,10 +85,106 @@ const BlueprintView = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfData]);
 
+  // Reset pan/zoom to a clean fit-to-width view whenever the visible page changes.
+  useEffect(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, [currentPage]);
+
   // Rendered size of the current page including zoom - used for the overlay SVG and the
-  // scroll container so nothing is silently clipped, and so click coordinates map correctly.
+  // content layer so nothing is silently clipped, and so click coordinates map correctly.
   const renderedWidth = containerWidth * zoom;
   const renderedHeight = pageAspectRatio ? renderedWidth / pageAspectRatio : renderedWidth * 1.294;
+
+  // Keeps the page from being dragged off into empty space forever - clamps the pan offset so
+  // the content can only go a small margin past the viewport edge, like a bounded canvas.
+  const clampPan = useCallback((x: number, y: number, w: number, h: number) => {
+    const margin = 150;
+    let minX: number, maxX: number, minY: number, maxY: number;
+    if (w <= containerWidth) {
+      const centerX = (containerWidth - w) / 2;
+      minX = centerX - margin;
+      maxX = centerX + margin;
+    } else {
+      minX = containerWidth - w - margin;
+      maxX = margin;
+    }
+    if (h <= containerHeight) {
+      const centerY = (containerHeight - h) / 2;
+      minY = centerY - margin;
+      maxY = centerY + margin;
+    } else {
+      minY = containerHeight - h - margin;
+      maxY = margin;
+    }
+    return { x: Math.min(maxX, Math.max(minX, x)), y: Math.min(maxY, Math.max(minY, y)) };
+  }, [containerWidth, containerHeight]);
+
+  // Zooms toward a specific point (in viewport px) so that point stays fixed on screen -
+  // used for both Ctrl/Cmd+scroll (cursor position) and the +/- buttons (viewport center).
+  const zoomTo = useCallback((newZoomRaw: number, anchorX: number, anchorY: number) => {
+    const newZoom = Math.min(2, Math.max(0.5, newZoomRaw));
+    if (newZoom === zoom || renderedWidth === 0 || renderedHeight === 0) return;
+    const newW = containerWidth * newZoom;
+    const newH = pageAspectRatio ? newW / pageAspectRatio : newW * 1.294;
+    const fracX = (anchorX - pan.x) / renderedWidth;
+    const fracY = (anchorY - pan.y) / renderedHeight;
+    const newPanX = anchorX - fracX * newW;
+    const newPanY = anchorY - fracY * newH;
+    setZoom(newZoom);
+    setPan(clampPan(newPanX, newPanY, newW, newH));
+  }, [zoom, pan, containerWidth, pageAspectRatio, renderedWidth, renderedHeight, clampPan]);
+
+  // Let Ctrl/Cmd + scroll wheel zoom in/out anchored at the cursor. React's onWheel is passive
+  // by default so it can't preventDefault - a native listener is needed to stop the page from
+  // scrolling. A plain scroll (no modifier) pans the canvas instead, like a whiteboard app.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) {
+        const rect = el.getBoundingClientRect();
+        zoomTo(zoom - e.deltaY * 0.0015, e.clientX - rect.left, e.clientY - rect.top);
+      } else {
+        setPan(prev => clampPan(prev.x - e.deltaX, prev.y - e.deltaY, renderedWidth, renderedHeight));
+      }
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [zoom, zoomTo, clampPan, renderedWidth, renderedHeight]);
+
+  // Click-and-drag panning: left-drag when idle (not drawing/calibrating/editing a region, so
+  // it never steals clicks meant for placing points or selecting a region), middle-drag always.
+  const handleCanvasMouseDown = (e: React.MouseEvent) => {
+    const isMiddle = e.button === 1;
+    const isLeftIdle = e.button === 0 && drawingMode === DrawingMode.None && !editingRegionId;
+    if (!isMiddle && !isLeftIdle) return;
+    if (isMiddle) e.preventDefault();
+    panStartRef.current = { mouseX: e.clientX, mouseY: e.clientY, panX: pan.x, panY: pan.y, w: renderedWidth, h: renderedHeight };
+    setIsPanning(true);
+  };
+
+  useEffect(() => {
+    if (!isPanning) return;
+    const onMove = (e: MouseEvent) => {
+      const start = panStartRef.current;
+      if (!start) return;
+      const newX = start.panX + (e.clientX - start.mouseX);
+      const newY = start.panY + (e.clientY - start.mouseY);
+      setPan(clampPan(newX, newY, start.w, start.h));
+    };
+    const onUp = () => {
+      setIsPanning(false);
+      panStartRef.current = null;
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [isPanning, clampPan]);
 
   // Track and restore last viewed page when switching tabs
   useEffect(() => {
@@ -525,7 +613,7 @@ const BlueprintView = () => {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setZoom(prev => Math.max(0.5, prev - 0.1))}
+              onClick={() => zoomTo(zoom - 0.1, containerWidth / 2, containerHeight / 2)}
             >
               <MinusIcon className="h-4 w-4" />
             </Button>
@@ -533,12 +621,12 @@ const BlueprintView = () => {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setZoom(prev => Math.min(2, prev + 0.1))}
+              onClick={() => zoomTo(zoom + 0.1, containerWidth / 2, containerHeight / 2)}
             >
               <Plus className="h-4 w-4" />
             </Button>
             <span className="text-xs text-muted-foreground hidden lg:inline">
-              (Ctrl/Cmd + scroll to zoom)
+              (Ctrl/Cmd + scroll to zoom, drag to pan)
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -627,21 +715,37 @@ const BlueprintView = () => {
         </div>
       )}
       {/* PDF and Drawing Overlay */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="md:col-span-3">
+      <div className="flex flex-col md:flex-row gap-4 items-start">
+        <Card className="flex-1 min-w-0 w-full">
           <CardContent className="p-4">
             <div
               ref={containerRef}
-              className="relative border border-border rounded-md overflow-auto w-full"
-              style={{ minHeight: 400, maxHeight: "75vh" }}
+              className="relative border border-border rounded-md w-full overflow-hidden select-none"
+              style={{
+                minHeight: 400,
+                height: "calc(100vh - 220px)",
+                backgroundImage:
+                  "linear-gradient(to right, rgba(128,128,128,0.18) 1px, transparent 1px), linear-gradient(to bottom, rgba(128,128,128,0.18) 1px, transparent 1px)",
+                backgroundSize: "24px 24px",
+                cursor: isPanning
+                  ? "grabbing"
+                  : drawingMode === DrawingMode.None && !editingRegionId
+                  ? "grab"
+                  : drawingMode !== DrawingMode.None
+                  ? "crosshair"
+                  : "default",
+              }}
+              onMouseDown={handleCanvasMouseDown}
             >
               {pdfData ? (
                 <div
                   style={{
                     width: renderedWidth,
                     height: renderedHeight,
-                    position: "relative",
-                    margin: "0 auto",
+                    position: "absolute",
+                    left: 0,
+                    top: 0,
+                    transform: `translate(${pan.x}px, ${pan.y}px)`,
                   }}
                 >
                   {/* PDF Layer (memoized, only re-renders on page/zoom/size change) */}
@@ -668,7 +772,7 @@ const BlueprintView = () => {
                   </svg>
                 </div>
               ) : (
-                <div className="flex items-center justify-center h-[400px] bg-muted">
+                <div className="flex items-center justify-center h-full">
                   <p className="text-muted-foreground">
                     Upload a blueprint PDF to get started
                   </p>
@@ -677,7 +781,7 @@ const BlueprintView = () => {
             </div>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="w-full md:w-72 shrink-0">
           <CardContent className="p-4">
             <h3 className="font-medium mb-3">Regions on Page {currentPage}</h3>
             <RegionsList
