@@ -8,14 +8,11 @@ import {
   Plus,
   MinusIcon,
   CheckIcon,
-  TrashIcon
 } from "lucide-react";
 import { useProject } from "@/context/ProjectContext";
 import { toast } from "sonner";
 import RegionsList from "./RegionsList";
 import { generateRandomColor, calculatePolygonArea } from "@/lib/utils";
-import { useLocation } from "react-router-dom";
-import { nanoid } from "nanoid";
 
 pdfjs.GlobalWorkerOptions.workerSrc = `${import.meta.env.BASE_URL}pdf.worker.mjs`;
 
@@ -157,13 +154,57 @@ const BlueprintView = () => {
     return () => el.removeEventListener("wheel", onWheel);
   }, [zoom, zoomTo, clampPan, renderedWidth, renderedHeight]);
 
-  // Click-and-drag panning: left-drag when idle (not drawing/calibrating/editing a region, so
-  // it never steals clicks meant for placing points or selecting a region), middle-drag always.
+  // Hold Space to pan by dragging with the left mouse button, in ANY mode - this is the
+  // standard canvas-app pattern (Figma/Photoshop/Miro) for panning the camera mid-draw without
+  // hijacking a key combo a browser already owns (WASD risks a stray Ctrl+W closing the tab;
+  // arrow keys fight the browser's own focus-scroll/outline behavior on whatever button last
+  // had focus). Middle-drag and left-drag-while-idle still work too.
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  // Set when a pan drag actually moved the mouse, so the click that fires right after
+  // mouseup (e.g. ending a space-pan over a region, or over the drawing surface) doesn't
+  // also place a region point / select a region.
+  const suppressNextClickRef = useRef(false);
+
+  useEffect(() => {
+    if (!pdfData) return;
+    const isTypingTarget = (el: EventTarget | null) => {
+      const tag = (el as HTMLElement)?.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || isTypingTarget(e.target)) return;
+      e.preventDefault(); // stop page-scroll and stop it "clicking" a focused button
+      if (!e.repeat) {
+        // Drop focus from whatever button was last clicked so no focus-ring/outline can
+        // reappear while the user is just trying to pan.
+        const active = document.activeElement as HTMLElement | null;
+        if (active && active !== document.body) active.blur();
+        setSpaceHeld(true);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "Space") setSpaceHeld(false);
+    };
+    const onBlur = () => setSpaceHeld(false);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [pdfData]);
+
+  // Click-and-drag panning: left-drag when idle or when Space is held (so it never steals
+  // clicks meant for placing points/selecting a region unless the user explicitly asks to
+  // pan), middle-drag always.
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     const isMiddle = e.button === 1;
     const isLeftIdle = e.button === 0 && drawingMode === DrawingMode.None && !editingRegionId;
-    if (!isMiddle && !isLeftIdle) return;
-    if (isMiddle) e.preventDefault();
+    const isLeftSpacePan = e.button === 0 && spaceHeld;
+    if (!isMiddle && !isLeftIdle && !isLeftSpacePan) return;
+    if (isMiddle || isLeftSpacePan) e.preventDefault();
     panStartRef.current = { mouseX: e.clientX, mouseY: e.clientY, panX: pan.x, panY: pan.y, w: renderedWidth, h: renderedHeight };
     setIsPanning(true);
   };
@@ -173,6 +214,9 @@ const BlueprintView = () => {
     const onMove = (e: MouseEvent) => {
       const start = panStartRef.current;
       if (!start) return;
+      if (Math.abs(e.clientX - start.mouseX) > 3 || Math.abs(e.clientY - start.mouseY) > 3) {
+        suppressNextClickRef.current = true;
+      }
       const newX = start.panX + (e.clientX - start.mouseX);
       const newY = start.panY + (e.clientY - start.mouseY);
       setPan(clampPan(newX, newY, start.w, start.h));
@@ -188,87 +232,6 @@ const BlueprintView = () => {
       window.removeEventListener("mouseup", onUp);
     };
   }, [isPanning, clampPan]);
-
-  // WASD camera panning - needed because while placing region/calibration points, left-click-
-  // drag is reserved for placing points, so the mouse alone can't move the camera mid-draw.
-  // Refs (rather than effect deps) keep the animation loop's closure fresh without having to
-  // tear down and restart the loop every time zoom/pan/size changes.
-  const heldKeysRef = useRef<Set<string>>(new Set());
-  const panRef = useRef(pan);
-  panRef.current = pan;
-  const clampPanRef = useRef(clampPan);
-  clampPanRef.current = clampPan;
-  const renderedWidthRef = useRef(renderedWidth);
-  renderedWidthRef.current = renderedWidth;
-  const renderedHeightRef = useRef(renderedHeight);
-  renderedHeightRef.current = renderedHeight;
-  const rafIdRef = useRef<number | null>(null);
-  const lastTsRef = useRef(0); //test
-
-  const stepPan = useCallback(() => {
-    const now = performance.now();
-    const dt = (now - lastTsRef.current) / 1000;
-    lastTsRef.current = now;
-    const keys = heldKeysRef.current;
-    const SPEED = 700; // screen px/sec
-    let dx = 0, dy = 0;
-    if (keys.has("ArrowLeft")) dx += SPEED * dt;
-    if (keys.has("ArrowRight")) dx -= SPEED * dt;
-    if (keys.has("ArrowUp")) dy += SPEED * dt;
-    if (keys.has("ArrowDown")) dy -= SPEED * dt;
-    if (dx !== 0 || dy !== 0) {
-      const next = clampPanRef.current(
-        panRef.current.x + dx,
-        panRef.current.y + dy,
-        renderedWidthRef.current,
-        renderedHeightRef.current
-      );
-      panRef.current = next;
-      setPan(next);
-    }
-    if (heldKeysRef.current.size > 0) {
-      rafIdRef.current = requestAnimationFrame(stepPan);
-    } else {
-      rafIdRef.current = null;
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!pdfData) return;
-    const isTypingTarget = (el: EventTarget | null) => {
-      const tag = (el as HTMLElement)?.tagName;
-      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      if (isTypingTarget(e.target)) return;
-      const key = e.key.toLowerCase();
-      if (key !== "w" && key !== "a" && key !== "s" && key !== "d") return;
-      e.preventDefault();
-      if (!heldKeysRef.current.has(key)) {
-        heldKeysRef.current.add(key);
-        if (rafIdRef.current === null) {
-          lastTsRef.current = performance.now();
-          rafIdRef.current = requestAnimationFrame(stepPan);
-        }
-      }
-    };
-    const onKeyUp = (e: KeyboardEvent) => {
-      heldKeysRef.current.delete(e.key.toLowerCase());
-    };
-    const onBlur = () => heldKeysRef.current.clear();
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", onBlur);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", onBlur);
-      heldKeysRef.current.clear();
-      if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
-      rafIdRef.current = null;
-    };
-  }, [pdfData, stepPan]);
 
   // Track and restore last viewed page when switching tabs
   useEffect(() => {
@@ -287,6 +250,10 @@ const BlueprintView = () => {
 
   // Unified SVG click handler for both region and calibration
   const handleSvgClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (suppressNextClickRef.current) {
+      suppressNextClickRef.current = false;
+      return;
+    }
     if (drawingMode === DrawingMode.Scaling) {
       // Calibration mode: only allow two points
       if (currentPoints.length >= 4) return;
@@ -541,7 +508,7 @@ const BlueprintView = () => {
       return (
         <g key={region.id}>
           <polygon
-            points={pointsToRender.map((p, i) =>
+            points={pointsToRender.map((_p, i) =>
               i % 2 === 0
                 ? `${pointsToRender[i] * renderedWidth},${pointsToRender[i + 1] * renderedWidth}`
                 : null
@@ -552,6 +519,10 @@ const BlueprintView = () => {
             opacity={isEditing ? 0.5 : 1}
             onClick={e => {
               e.stopPropagation();
+              if (suppressNextClickRef.current) {
+                suppressNextClickRef.current = false;
+                return;
+              }
               setSelectedRegionId(region.id);
               // Start editing on double click
               if (e.detail === 2) handleRegionEdit(region.id);
@@ -587,7 +558,7 @@ const BlueprintView = () => {
       <>
         <polyline
           // Thinner, more transparent line for accuracy
-          points={currentPoints.map((p, i) =>
+          points={currentPoints.map((_p, i) =>
             i % 2 === 0
               ? `${currentPoints[i] * renderedWidth},${currentPoints[i + 1] * renderedWidth}`
               : null
@@ -722,7 +693,7 @@ const BlueprintView = () => {
               <Plus className="h-4 w-4" />
             </Button>
             <span className="text-xs text-muted-foreground hidden lg:inline">
-              (Ctrl/Cmd+scroll to zoom, drag or WASD to pan, right-click to undo a point)
+              (Ctrl/Cmd+scroll to zoom, Space+drag or scroll to pan, right-click to undo a point)
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -825,6 +796,8 @@ const BlueprintView = () => {
                 backgroundSize: "24px 24px",
                 cursor: isPanning
                   ? "grabbing"
+                  : spaceHeld
+                  ? "grab"
                   : drawingMode === DrawingMode.None && !editingRegionId
                   ? "grab"
                   : drawingMode !== DrawingMode.None
