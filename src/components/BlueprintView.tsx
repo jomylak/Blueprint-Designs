@@ -212,10 +212,10 @@ const BlueprintView = () => {
     const keys = heldKeysRef.current;
     const SPEED = 700; // screen px/sec
     let dx = 0, dy = 0;
-    if (keys.has("a")) dx += SPEED * dt;
-    if (keys.has("d")) dx -= SPEED * dt;
-    if (keys.has("w")) dy += SPEED * dt;
-    if (keys.has("s")) dy -= SPEED * dt;
+    if (keys.has("ArrowLeft")) dx += SPEED * dt;
+    if (keys.has("ArrowRight")) dx -= SPEED * dt;
+    if (keys.has("ArrowUp")) dy += SPEED * dt;
+    if (keys.has("ArrowDown")) dy -= SPEED * dt;
     if (dx !== 0 || dy !== 0) {
       const next = clampPanRef.current(
         panRef.current.x + dx,
