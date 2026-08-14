@@ -141,7 +141,58 @@ export function displayUnitToFeet(value: number, unit: string): number {
   }
 }
 
+function gcd(a: number, b: number): number {
+  return b === 0 ? a : gcd(b, a % b);
+}
+
+// Formats a length as feet + inches + a fraction of an inch (e.g. 9'-10 7/8"), the standard
+// construction/blueprint convention - instead of decimal feet. Rounds only once, to the
+// nearest fractional inch, straight from the full-precision `feet` value (not from an
+// already-rounded decimal), so the fraction reflects the true measurement as closely as the
+// chosen denominator allows rather than compounding two rounding steps.
+export function formatFeetInches(feet: number, denominator: number = 16): string {
+  const sign = feet < 0 ? "-" : "";
+  const absFeet = Math.abs(feet);
+  let wholeFeet = Math.floor(absFeet);
+  const remainderInches = (absFeet - wholeFeet) * 12;
+  let fracUnits = Math.round(remainderInches * denominator);
+  let wholeInches = Math.floor(fracUnits / denominator);
+  fracUnits = fracUnits % denominator;
+  if (wholeInches >= 12) {
+    wholeFeet += Math.floor(wholeInches / 12);
+    wholeInches = wholeInches % 12;
+  }
+  let fracStr = "";
+  if (fracUnits > 0) {
+    const g = gcd(fracUnits, denominator);
+    fracStr = ` ${fracUnits / g}/${denominator / g}`;
+  }
+  const inchesStr = `${wholeInches}${fracStr}"`;
+  return wholeFeet > 0 ? `${sign}${wholeFeet}'-${inchesStr}` : `${sign}${inchesStr}`;
+}
+
+// Same idea but for a pure-inches measurement (no feet breakdown) - used when the project was
+// calibrated in inches rather than feet.
+export function formatInchesFraction(totalInches: number, denominator: number = 16): string {
+  const sign = totalInches < 0 ? "-" : "";
+  const abs = Math.abs(totalInches);
+  let whole = Math.floor(abs);
+  let fracUnits = Math.round((abs - whole) * denominator);
+  if (fracUnits === denominator) {
+    whole += 1;
+    fracUnits = 0;
+  }
+  let fracStr = "";
+  if (fracUnits > 0) {
+    const g = gcd(fracUnits, denominator);
+    fracStr = ` ${fracUnits / g}/${denominator / g}`;
+  }
+  return `${sign}${whole}${fracStr}"`;
+}
+
 export function formatLength(feet: number, unit: string): string {
+  if (unit === "ft") return formatFeetInches(feet);
+  if (unit === "in") return formatInchesFraction(feet * 12);
   return `${feetToDisplayUnit(feet, unit).toFixed(1)}${unit}`;
 }
 
