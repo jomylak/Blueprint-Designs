@@ -1,13 +1,52 @@
 import { useProject } from "@/context/ProjectContext";
+import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
-import { FileIcon, FolderIcon, Upload } from "lucide-react";
+import { FileIcon, FolderIcon, Upload, CloudUpload, LogIn, LogOut } from "lucide-react";
 import { toast } from "sonner";
-import { useRef } from "react";
+import { useRef, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { isElectron, openBytesFromFile } from "@/lib/fileIO";
+import { createCloudProject, updateCloudProject } from "@/lib/api";
+import AuthDialog from "@/components/AuthDialog";
 
 const Header = () => {
-  const { loadPdf, projectName, saveProject, importProject, importProjectFromBytes } = useProject();
+  const {
+    loadPdf,
+    projectName,
+    saveProject,
+    importProject,
+    importProjectFromBytes,
+    buildProjectData,
+    cloudProjectId,
+    setCloudProjectId,
+  } = useProject();
+  const { user, signOut } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [authOpen, setAuthOpen] = useState(false);
+  const queryClient = useQueryClient();
+
+  const saveToCloudMutation = useMutation({
+    mutationFn: () => {
+      const data = buildProjectData();
+      return cloudProjectId
+        ? updateCloudProject(cloudProjectId, projectName, data)
+        : createCloudProject(projectName, data);
+    },
+    onSuccess: (project) => {
+      setCloudProjectId(project.id);
+      queryClient.invalidateQueries({ queryKey: ["cloud-projects"] });
+      toast.success("Saved to cloud!");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const handleSaveToCloud = () => {
+    if (!user) {
+      setAuthOpen(true);
+      return;
+    }
+    saveToCloudMutation.mutate();
+  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -94,8 +133,43 @@ const Header = () => {
             style={{ display: "none" }}
             onChange={handleImportFile}
           />
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleSaveToCloud}
+            className="flex items-center gap-1"
+            disabled={!projectName || saveToCloudMutation.isPending}
+          >
+            <CloudUpload className="h-4 w-4" />
+            <span>{saveToCloudMutation.isPending ? "Saving..." : "Save to Cloud"}</span>
+          </Button>
+
+          {user ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => signOut()}
+              className="flex items-center gap-1"
+              title={user.email ?? undefined}
+            >
+              <LogOut className="h-4 w-4" />
+              <span className="max-w-[120px] truncate">{user.email}</span>
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setAuthOpen(true)}
+              className="flex items-center gap-1"
+            >
+              <LogIn className="h-4 w-4" />
+              <span>Sign In</span>
+            </Button>
+          )}
         </div>
       </div>
+      <AuthDialog open={authOpen} onOpenChange={setAuthOpen} />
     </header>
   );
 };

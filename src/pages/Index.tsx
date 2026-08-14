@@ -3,6 +3,7 @@ import BlueprintView from "@/components/BlueprintView";
 import EstimationSummary from "@/components/EstimationSummary";
 import MaterialLibrary from "@/components/MaterialLibrary";
 import SavedProjects from "@/components/SavedProjects";
+import CloudProjects from "@/components/CloudProjects";
 import Header from "@/components/Header";
 import { useProject } from "@/context/ProjectContext";
 import { Button } from "@/components/ui/button";
@@ -50,10 +51,11 @@ const Index = () => {
       <Header />
       <main className="flex-1 w-full py-4 px-2 md:px-4">
         <Tabs defaultValue="blueprint" className="w-full">
-          <TabsList className="grid grid-cols-3 mb-4 max-w-xl">
+          <TabsList className="grid grid-cols-4 mb-4 max-w-2xl">
             <TabsTrigger value="blueprint">Blueprint View</TabsTrigger>
             <TabsTrigger value="estimation">Estimation Summary</TabsTrigger>
             <TabsTrigger value="materials">Material Library</TabsTrigger>
+            <TabsTrigger value="projects">Projects</TabsTrigger>
           </TabsList>
           <TabsContent value="blueprint" forceMount className="data-[state=inactive]:hidden">
             <BlueprintViewWrapper />
@@ -63,6 +65,10 @@ const Index = () => {
           </TabsContent>
           <TabsContent value="materials" forceMount className="data-[state=inactive]:hidden max-w-3xl mx-auto">
             <MaterialLibrary />
+          </TabsContent>
+          <TabsContent value="projects" forceMount className="data-[state=inactive]:hidden max-w-5xl mx-auto space-y-8">
+            <SavedProjects />
+            <CloudProjects />
           </TabsContent>
         </Tabs>
       </main>

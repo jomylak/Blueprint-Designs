@@ -1,5 +1,7 @@
 # Blueprint Designs
 
+**[Live demo](https://blueprint-designs-alpha.vercel.app)**
+
 A desktop tool for taking off material quantities from blueprint PDFs and generating cost estimates.
 
 Upload a PDF blueprint, calibrate the scale against a known real-world distance, trace out regions (rooms/areas) on each page, assign a material and price per square foot to each region, and get a live cost estimate with a CSV export.
@@ -39,3 +41,9 @@ Uses Electron Forge to produce installers/packages for the current platform (see
 ## Project data
 
 Projects (including the uploaded PDF) are saved to the browser's/Electron's local storage. You can also export a project to a `.json` file and re-import it later from the header controls.
+
+## Cloud sync (optional)
+
+Signing in unlocks "Save to Cloud" and a Cloud Projects list under the Projects tab, backed by a
+Flask REST API + Postgres (see `backend/`). This is entirely optional - the local save/export
+flow above works fully without an account.

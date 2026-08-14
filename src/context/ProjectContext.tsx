@@ -44,6 +44,9 @@ interface ProjectContextType {
   loadProject: (data: any) => void;
   importProject: (file: File) => void;
   importProjectFromBytes: (bytes: Uint8Array) => void;
+  buildProjectData: () => any;
+  cloudProjectId: string | null;
+  setCloudProjectId: (id: string | null) => void;
 }
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
@@ -56,6 +59,10 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
   const [scaleUnit, setScaleUnit] = useState('ft');
   const [regions, setRegions] = useState<Region[]>([]);
   const [projectName, setProjectName] = useState('');
+  // Tracks which cloud-saved project (if any) the currently-open project corresponds to, so
+  // repeated "Save to Cloud" clicks update that same row instead of creating duplicates. Reset
+  // whenever a new/local/imported project is loaded; set explicitly after opening a cloud project.
+  const [cloudProjectId, setCloudProjectId] = useState<string | null>(null);
   const [materials, setMaterials] = useState<Material[]>([
     { id: '1', name: 'Stone (Example)', pricePerSqFt: 7.50 },
   ]);
@@ -85,6 +92,7 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
     setScaleUnit('ft');
     setCurrentPage(1);
     setPageCount(0); // Will be set by BlueprintView when PDF loads
+    setCloudProjectId(null);
   };
 
   const addRegion = useCallback((region: Omit<Region, 'id' | 'name'>) => {
@@ -147,19 +155,21 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
     }, 0);
   }, [regions, materials]);
 
+  // The canonical project data shape - shared by local save/export and cloud save, so the two
+  // can never drift out of sync with each other.
+  const buildProjectData = useCallback(() => ({
+    name: projectName,
+    scale,
+    scaleUnit,
+    regions,
+    materials,
+    pageCount,
+    pdfBase64: pdfData ? uint8ToBase64(pdfData) : null,
+  }), [projectName, scale, scaleUnit, regions, materials, pageCount, pdfData]);
+
   const saveProject = useCallback(async () => {
     try {
-      // Convert pdfData to base64 for storage
-      const pdfBase64 = pdfData ? uint8ToBase64(pdfData) : null;
-      const projectData = {
-        name: projectName,
-        scale,
-        scaleUnit,
-        regions,
-        materials,
-        pageCount,
-        pdfBase64,
-      };
+      const projectData = buildProjectData();
 
       // Estimate size (in bytes) of the project data
       const estimateSize = (obj: any) => {
@@ -239,10 +249,11 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
       toast.error('Failed to save project. Your browser storage may be full.');
       return false;
     }
-  }, [pdfData, projectName, scale, scaleUnit, regions, materials, pageCount]);
+  }, [buildProjectData, projectName]);
 
   const loadProject = useCallback((data: any) => {
     try {
+      setCloudProjectId(null);
       setProjectName(data.name || 'Imported Project');
       setScale(data.scale || 1);
       setScaleUnit(data.scaleUnit || 'ft');
@@ -330,6 +341,9 @@ export const ProjectProvider = ({ children }: { children: React.ReactNode }) => 
         loadProject,
         importProject, // <-- add to context
         importProjectFromBytes,
+        buildProjectData,
+        cloudProjectId,
+        setCloudProjectId,
       }}
     >
       {children}

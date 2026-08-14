@@ -102,11 +102,14 @@ const BlueprintView = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfData]);
 
-  // Reset pan/zoom to a clean fit-to-width view whenever the visible page changes.
+  // Reset pan/zoom to a clean fit-to-width view whenever the visible page changes, or a
+  // (possibly different) project's PDF is loaded - without the pdfData dependency, opening
+  // another project while already on page 1 left the camera wherever it was for the previous
+  // project, and the pan clamp then trapped it away from center.
   useEffect(() => {
     setZoom(1);
     setPan({ x: 0, y: 0 });
-  }, [currentPage]);
+  }, [currentPage, pdfData]);
 
   // Rendered size of the current page including zoom - used for the overlay SVG and the
   // content layer so nothing is silently clipped, and so click coordinates map correctly.

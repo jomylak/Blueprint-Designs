@@ -11,12 +11,21 @@ interface SavedProject {
   id: string;
   name: string;
   date: string;
-  previewData: {
-    regionsCount: number;
-    materialsCount: number;
-    totalCost: number;
-  };
   data: any;
+}
+
+// Local saves only ever store { id, name, date, data } - preview stats are derived from data
+// here rather than relied on as a separate stored field, so this works regardless of when/how
+// the project was saved.
+function getPreview(project: SavedProject) {
+  const regions = project.data?.regions || [];
+  const materials = project.data?.materials || [];
+  const materialById = new Map(materials.map((m: any) => [m.id, m]));
+  const totalCost = regions.reduce((sum: number, region: any) => {
+    const material = materialById.get(region.materialId) as any;
+    return material ? sum + material.pricePerSqFt * region.area : sum;
+  }, 0);
+  return { regionsCount: regions.length, materialsCount: materials.length, totalCost };
 }
 
 const SavedProjects = () => {
@@ -90,7 +99,9 @@ const SavedProjects = () => {
       )}
       
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {filteredProjects.map((project) => (
+        {filteredProjects.map((project) => {
+          const preview = getPreview(project);
+          return (
           <Card key={project.id} className="overflow-hidden hover:shadow-md transition-shadow">
             <CardContent className="p-0">
               <div className="p-4 border-b bg-muted/10">
@@ -113,15 +124,15 @@ const SavedProjects = () => {
                 <div className="grid grid-cols-3 text-sm">
                   <div>
                     <p className="text-muted-foreground">Regions</p>
-                    <p className="font-medium">{project.previewData.regionsCount}</p>
+                    <p className="font-medium">{preview.regionsCount}</p>
                   </div>
                   <div>
                     <p className="text-muted-foreground">Materials</p>
-                    <p className="font-medium">{project.previewData.materialsCount}</p>
+                    <p className="font-medium">{preview.materialsCount}</p>
                   </div>
                   <div>
                     <p className="text-muted-foreground">Est. Cost</p>
-                    <p className="font-medium">${project.previewData.totalCost.toFixed(2)}</p>
+                    <p className="font-medium">${preview.totalCost.toFixed(2)}</p>
                   </div>
                 </div>
                 
@@ -135,7 +146,8 @@ const SavedProjects = () => {
               </div>
             </CardContent>
           </Card>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
