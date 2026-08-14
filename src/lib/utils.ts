@@ -6,23 +6,23 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+export const REGION_COLORS = [
+  "#f97316", // orange
+  "#3b82f6", // blue
+  "#10b981", // emerald
+  "#8b5cf6", // violet
+  "#ec4899", // pink
+  "#14b8a6", // teal
+  "#6366f1", // indigo
+  "#f59e0b", // amber
+  "#6b7280", // gray
+  "#0ea5e9", // sky
+  "#84cc16", // lime
+  "#d946ef", // fuchsia
+];
+
 export function generateRandomColor(): string {
-  const colors = [
-    "#f97316", // orange
-    "#3b82f6", // blue
-    "#10b981", // emerald
-    "#8b5cf6", // violet
-    "#ec4899", // pink
-    "#14b8a6", // teal
-    "#6366f1", // indigo
-    "#f59e0b", // amber
-    "#6b7280", // gray
-    "#0ea5e9", // sky
-    "#84cc16", // lime
-    "#d946ef", // fuchsia
-  ];
-  
-  return colors[Math.floor(Math.random() * colors.length)];
+  return REGION_COLORS[Math.floor(Math.random() * REGION_COLORS.length)];
 }
 
 interface RegionLike {
@@ -233,4 +233,47 @@ export function computeEdgeLabels(
     });
   }
   return specs;
+}
+
+export interface RegionNameLabelSpec {
+  x: number;
+  y: number;
+  fontSize: number;
+  text: string;
+}
+
+// Places a region's name at its centroid, styled the same way as edge length labels (halo
+// text, no background box). Only returned when the region's on-screen bounding box is
+// comfortably bigger than the text, so small regions just don't get a name label rather than
+// having it overflow the shape.
+export function computeRegionNameLabel(
+  points: number[],
+  name: string,
+  renderedWidth: number,
+  opts: { fontSize?: number } = {}
+): RegionNameLabelSpec | null {
+  if (!name) return null;
+  const fontSize = opts.fontSize ?? 11;
+  const n = points.length / 2;
+  if (n < 3) return null;
+
+  let cx = 0, cy = 0, minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const x = points[i * 2], y = points[i * 2 + 1];
+    cx += x;
+    cy += y;
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  }
+  cx /= n;
+  cy /= n;
+
+  const textWidth = name.length * fontSize * EDGE_LABEL_CHAR_WIDTH + EDGE_LABEL_PADDING;
+  const bboxWidthPx = (maxX - minX) * renderedWidth;
+  const bboxHeightPx = (maxY - minY) * renderedWidth;
+  if (bboxWidthPx < textWidth + 16 || bboxHeightPx < fontSize * 3.5) return null;
+
+  return { x: cx * renderedWidth, y: cy * renderedWidth, fontSize, text: name };
 }

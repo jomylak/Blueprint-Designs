@@ -10,6 +10,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Pencil, TrashIcon } from "lucide-react";
 import { useState } from "react";
+import { REGION_COLORS } from "@/lib/utils";
 
 interface RegionsListProps {
   regions: any[];
@@ -33,27 +34,32 @@ const RegionsList = ({
   const { materials, updateRegion } = useProject();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<string>("");
+  // Which region's color-swatch grid is currently open - only opens while that region's name
+  // is being edited (clicking the pencil), and closes whenever name-editing ends.
+  const [colorPickerId, setColorPickerId] = useState<string | null>(null);
 
   // Save edit and update region name everywhere (force update in context)
   const saveEdit = (regionId: string) => {
     updateRegion(regionId, { name: editingName });
     setEditingId(null);
+    setColorPickerId(null);
   };
-  
+
   const handleMaterialChange = (regionId: string, materialId: string) => {
     updateRegion(regionId, { materialId });
   };
-  
+
   const startEditing = (regionId: string, currentName: string) => {
     setEditingId(regionId);
     setEditingName(currentName);
   };
-  
+
   const handleKeyDown = (e: React.KeyboardEvent, regionId: string) => {
     if (e.key === "Enter") {
       saveEdit(regionId);
     } else if (e.key === "Escape") {
       setEditingId(null);
+      setColorPickerId(null);
     }
   };
 
@@ -79,10 +85,43 @@ const RegionsList = ({
           >
             <div className="flex justify-between">
               <div className="flex items-center">
-                <div 
-                  className="w-4 h-4 rounded-full mr-2" 
-                  style={{ backgroundColor: region.color }}
-                />
+                <div className="relative mr-2">
+                  <button
+                    type="button"
+                    className="w-4 h-4 rounded-full flex items-center justify-center"
+                    style={{ backgroundColor: region.color, cursor: editingId === region.id ? "pointer" : "default" }}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (editingId !== region.id) return;
+                      setColorPickerId(prev => (prev === region.id ? null : region.id));
+                    }}
+                  >
+                    {editingId === region.id && (
+                      <Pencil className="h-2.5 w-2.5 text-white" style={{ filter: "drop-shadow(0 0 1px rgba(0,0,0,0.8))" }} />
+                    )}
+                  </button>
+                  {editingId === region.id && colorPickerId === region.id && (
+                    <div
+                      className="absolute z-20 top-5 left-0 p-2 bg-popover border border-border rounded-md shadow-md grid grid-cols-4 gap-1.5 w-max"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {REGION_COLORS.map((color) => (
+                        <button
+                          key={color}
+                          type="button"
+                          className="w-5 h-5 rounded-full border-2"
+                          style={{ backgroundColor: color, borderColor: color === region.color ? "#111827" : "transparent" }}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            updateRegion(region.id, { color });
+                            setColorPickerId(null);
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
                 {editingId === region.id ? (
                   <Input 
                     value={editingName}

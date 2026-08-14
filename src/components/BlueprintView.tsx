@@ -16,6 +16,7 @@ import {
   generateRandomColor,
   calculatePolygonArea,
   computeEdgeLabels,
+  computeRegionNameLabel,
   displayUnitToFeet,
   feetToDisplayUnit,
 } from "@/lib/utils";
@@ -29,7 +30,7 @@ enum DrawingMode {
 }
 
 const ZOOM_MIN = 0.5;
-const ZOOM_MAX = 5;
+const ZOOM_MAX = 10;
 
 const BlueprintView = () => {
   const {
@@ -62,6 +63,10 @@ const BlueprintView = () => {
   const [isPanning, setIsPanning] = useState(false);
   const panStartRef = useRef<{ mouseX: number; mouseY: number; panX: number; panY: number; w: number; h: number } | null>(null);
   const [calibrationInput, setCalibrationInput] = useState("");
+  // Feet calibration is entered as separate feet + inches boxes (common for blueprint
+  // dimensions like 10ft 6in); other units use the single calibrationInput box above.
+  const [calibrationFeet, setCalibrationFeet] = useState("");
+  const [calibrationInches, setCalibrationInches] = useState("");
   const [calibrationUnit, setCalibrationUnit] = useState("ft");
   const [editingRegionId, setEditingRegionId] = useState<string | null>(null);
   const [editingPoints, setEditingPoints] = useState<number[] | null>(null);
@@ -157,7 +162,7 @@ const BlueprintView = () => {
       e.preventDefault();
       if (e.ctrlKey || e.metaKey) {
         const rect = el.getBoundingClientRect();
-        zoomTo(zoom - e.deltaY * 0.0015, e.clientX - rect.left, e.clientY - rect.top);
+        zoomTo(zoom - e.deltaY * 0.004, e.clientX - rect.left, e.clientY - rect.top);
       } else {
         setPan(prev => clampPan(prev.x - e.deltaX, prev.y - e.deltaY, renderedWidth, renderedHeight));
       }
@@ -343,6 +348,8 @@ const BlueprintView = () => {
     setCurrentPoints([]);
     setDrawingMode(DrawingMode.None);
     setCalibrationInput("");
+    setCalibrationFeet("");
+    setCalibrationInches("");
     setCalibrationUnit("ft");
     setMousePos(null);
   };
@@ -354,24 +361,39 @@ const BlueprintView = () => {
     return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
   };
 
+  // The real-world calibration distance, always resolved to feet - null if not enough has
+  // been entered yet. Feet uses its own two boxes (feet + inches); other units use the single
+  // calibrationInput box.
+  const getCalibrationRealFeet = (): number | null => {
+    if (calibrationUnit === "ft") {
+      const ft = parseFloat(calibrationFeet) || 0;
+      const inches = parseFloat(calibrationInches) || 0;
+      const total = ft + inches / 12;
+      return total > 0 ? total : null;
+    }
+    const val = parseFloat(calibrationInput);
+    if (!val || val <= 0) return null;
+    if (calibrationUnit === "in") return val / 12;
+    if (calibrationUnit === "cm") return val / 30.48;
+    if (calibrationUnit === "m") return val * 3.28084;
+    return val;
+  };
+
   const handleCalibrationSave = () => {
     const pixelDist = getCalibrationPixelDistance();
-    const realDist = parseFloat(calibrationInput);
-    if (pixelDist === 0 || !realDist || realDist <= 0) {
+    const realDistInFeet = getCalibrationRealFeet();
+    if (pixelDist === 0 || realDistInFeet === null) {
       toast.error("Please select two points and enter a valid real-world distance.");
       return;
     }
-    // Convert to feet for scale if needed
-    let realDistInFeet = realDist;
-    if (calibrationUnit === "in") realDistInFeet = realDist / 12;
-    else if (calibrationUnit === "cm") realDistInFeet = realDist / 30.48;
-    else if (calibrationUnit === "m") realDistInFeet = realDist * 3.28084;
     const newScale = pixelDist / realDistInFeet;
     setScale(newScale);
     setScaleUnit(calibrationUnit);
     setCurrentPoints([]);
     setDrawingMode(DrawingMode.None);
     setCalibrationInput("");
+    setCalibrationFeet("");
+    setCalibrationInches("");
     setCalibrationUnit("ft");
     setMousePos(null);
     toast.success("Scale calibrated!");
@@ -456,6 +478,26 @@ const BlueprintView = () => {
 
   const handlePointMouseDown = (idx: number) => {
     setDraggedPointIdx(idx);
+  };
+
+  // Dragging from a point of the region's outline (rather than an existing corner) inserts a
+  // new point right there and immediately starts dragging it, like Figma/Illustrator path
+  // editing - lets the user add a corner mid-edge instead of only moving existing ones.
+  const handleEdgeInsertMouseDown = (edgeIndex: number, e: React.MouseEvent<SVGLineElement>) => {
+    if (!editingPoints) return;
+    const svg = e.currentTarget.ownerSVGElement;
+    if (!svg || typeof svg.createSVGPoint !== "function") return;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return;
+    const cursorpt = pt.matrixTransform(ctm.inverse());
+    const insertAt = (edgeIndex + 1) * 2;
+    const newPoints = [...editingPoints];
+    newPoints.splice(insertAt, 0, cursorpt.x / renderedWidth, cursorpt.y / renderedWidth);
+    setEditingPoints(newPoints);
+    setDraggedPointIdx(insertAt);
   };
 
   const handleSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -587,28 +629,65 @@ const BlueprintView = () => {
             }}
             style={{ cursor: isEditing ? "move" : "pointer" }}
           />
-          {/* Render draggable points if editing */}
+          {/* Invisible, generously-wide hit area along each edge while editing - dragging from
+              here (rather than an existing point) inserts a new point at the cursor. Rendered
+              before the point circles so a click near an existing corner still hits the point,
+              not the edge behind it. */}
+          {isEditing && pointsToRender.length >= 6 && Array.from({ length: pointsToRender.length / 2 }).map((_, i) => {
+            const n = pointsToRender.length / 2;
+            const j = (i + 1) % n;
+            return (
+              <line
+                key={`edge-insert-${i}`}
+                x1={pointsToRender[i * 2] * renderedWidth}
+                y1={pointsToRender[i * 2 + 1] * renderedWidth}
+                x2={pointsToRender[j * 2] * renderedWidth}
+                y2={pointsToRender[j * 2 + 1] * renderedWidth}
+                stroke="transparent"
+                strokeWidth={14}
+                style={{ cursor: "copy", pointerEvents: "all" }}
+                onMouseDown={e => {
+                  e.stopPropagation();
+                  handleEdgeInsertMouseDown(i, e);
+                }}
+              />
+            );
+          })}
+          {/* Draggable corner points - enlarged and hollow (transparent center, only a ring)
+              so they're easy to grab without hiding the blueprint linework right under them. */}
           {isEditing && pointsToRender.length >= 2 && Array.from({ length: pointsToRender.length / 2 }).map((_, i) => (
-            <circle
+            <g
               key={i}
-              cx={pointsToRender[i * 2] * renderedWidth}
-              cy={pointsToRender[i * 2 + 1] * renderedWidth}
-              r={1}
-              fill="#3b82f6"
-              opacity={0.5}
-              stroke="#fff"
-              strokeWidth={0.7}
-              style={{ cursor: "pointer" }}
               onMouseDown={e => {
                 e.stopPropagation();
                 handlePointMouseDown(i * 2);
               }}
-            />
+              style={{ cursor: "pointer", pointerEvents: "all" }}
+            >
+              <circle
+                cx={pointsToRender[i * 2] * renderedWidth}
+                cy={pointsToRender[i * 2 + 1] * renderedWidth}
+                r={8}
+                fill="none"
+                stroke="#ffffff"
+                strokeWidth={3}
+                opacity={0.9}
+              />
+              <circle
+                cx={pointsToRender[i * 2] * renderedWidth}
+                cy={pointsToRender[i * 2 + 1] * renderedWidth}
+                r={8}
+                fill="none"
+                stroke="#3b82f6"
+                strokeWidth={1.5}
+              />
+            </g>
           ))}
           {/* Edge length labels - calibrated real-world distance along each side, inset toward
               the region's interior (so two regions sharing/close to an edge don't collide) and
-              rotated to read along the edge. Clickable while editing to type an exact
-              correction if a hand-drawn edge is a bit off. */}
+              rotated to read along the edge. No background box - a white text halo keeps them
+              legible without blocking the region's own color/blueprint underneath. Clickable
+              while editing to type an exact correction if a hand-drawn edge is a bit off. */}
           {pointsToRender.length >= 6 && computeEdgeLabels(pointsToRender, scale, scaleUnit, renderedWidth).map(spec => (
             <g
               key={`edge-${spec.edgeIndex}`}
@@ -616,22 +695,55 @@ const BlueprintView = () => {
               onClick={isEditing ? e => { e.stopPropagation(); handleEdgeLabelClick(spec.edgeIndex, spec.lengthFeet); } : undefined}
               style={{ cursor: isEditing ? "pointer" : "default" }}
             >
-              <rect
-                x={spec.x - spec.width / 2}
-                y={spec.y - spec.fontSize / 2 - 2}
-                width={spec.width}
-                height={spec.fontSize + 4}
-                rx={2}
-                fill="#ffffff"
-                opacity={0.85}
-                stroke={isEditing ? "#3b82f6" : "none"}
-                strokeWidth={0.75}
-              />
-              <text x={spec.x} y={spec.y + spec.fontSize * 0.32} textAnchor="middle" fontSize={spec.fontSize} fill="#111827">
+              {isEditing && (
+                <rect
+                  x={spec.x - spec.width / 2}
+                  y={spec.y - spec.fontSize / 2 - 2}
+                  width={spec.width}
+                  height={spec.fontSize + 4}
+                  fill="transparent"
+                  style={{ pointerEvents: "all" }}
+                />
+              )}
+              <text
+                x={spec.x}
+                y={spec.y + spec.fontSize * 0.32}
+                textAnchor="middle"
+                fontSize={spec.fontSize}
+                fill="#111827"
+                stroke="#ffffff"
+                strokeWidth={3}
+                strokeLinejoin="round"
+                paintOrder="stroke"
+                style={{ pointerEvents: "none" }}
+              >
                 {spec.text}
               </text>
             </g>
           ))}
+          {/* Region name at the centroid, same transparent-halo styling as the edge labels -
+              only shown when the shape is comfortably bigger than the text. */}
+          {(() => {
+            const nameSpec = computeRegionNameLabel(pointsToRender, region.name, renderedWidth);
+            if (!nameSpec) return null;
+            return (
+              <text
+                x={nameSpec.x}
+                y={nameSpec.y + nameSpec.fontSize * 0.32}
+                textAnchor="middle"
+                fontSize={nameSpec.fontSize}
+                fontWeight={600}
+                fill="#111827"
+                stroke="#ffffff"
+                strokeWidth={3.5}
+                strokeLinejoin="round"
+                paintOrder="stroke"
+                style={{ pointerEvents: "none" }}
+              >
+                {nameSpec.text}
+              </text>
+            );
+          })()}
         </g>
       );
     })
@@ -754,49 +866,53 @@ const BlueprintView = () => {
     <div className="flex flex-col gap-4 h-full">
       {/* Page navigation and drawing controls */}
       {pdfData && (
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={currentPage <= 1}
-              onClick={() => navigateToPage('prev')}
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-            <span className="text-sm">
-              Page {currentPage} of {pageCount}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={currentPage >= pageCount}
-              onClick={() => navigateToPage('next')}
-            >
-              <ArrowRight className="h-4 w-4" />
-            </Button>
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap justify-between items-center gap-2">
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={currentPage <= 1}
+                onClick={() => navigateToPage('prev')}
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+              <span className="text-sm">
+                Page {currentPage} of {pageCount}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={currentPage >= pageCount}
+                onClick={() => navigateToPage('next')}
+              >
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => zoomTo(zoom - 0.2, containerWidth / 2, containerHeight / 2)}
+              >
+                <MinusIcon className="h-4 w-4" />
+              </Button>
+              <span className="text-sm w-16 text-center">{Math.round(zoom * 100)}%</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => zoomTo(zoom + 0.2, containerWidth / 2, containerHeight / 2)}
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+              <span className="text-xs text-muted-foreground hidden lg:inline">
+                (Ctrl/Cmd+scroll to zoom, Space+drag or scroll to pan, right-click to undo a point)
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => zoomTo(zoom - 0.1, containerWidth / 2, containerHeight / 2)}
-            >
-              <MinusIcon className="h-4 w-4" />
-            </Button>
-            <span className="text-sm w-16 text-center">{Math.round(zoom * 100)}%</span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => zoomTo(zoom + 0.1, containerWidth / 2, containerHeight / 2)}
-            >
-              <Plus className="h-4 w-4" />
-            </Button>
-            <span className="text-xs text-muted-foreground hidden lg:inline">
-              (Ctrl/Cmd+scroll to zoom, Space+drag or scroll to pan, right-click to undo a point)
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
+          {/* Drawing/calibration controls get their own row so the (wider, when calibrating in
+              feet) input group never runs into the zoom hint text above. */}
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant={drawingMode === DrawingMode.Scaling ? "secondary" : "outline"}
               size="sm"
@@ -804,21 +920,46 @@ const BlueprintView = () => {
                 setDrawingMode(DrawingMode.Scaling);
                 setCurrentPoints([]);
                 setCalibrationInput("");
+                setCalibrationFeet("");
+                setCalibrationInches("");
                 setCalibrationUnit("ft");
               }}
             >
               Calibrate Scale
             </Button>
             {drawingMode === DrawingMode.Scaling && (
-              <div className="flex items-center gap-2 ml-2">
-                <input
-                  type="number"
-                  className="border px-2 py-1 rounded w-20 text-black bg-white"
-                  placeholder="Length"
-                  value={calibrationInput}
-                  onChange={e => setCalibrationInput(e.target.value)}
-                  style={{ color: "#000", background: "#fff" }}
-                />
+              <div className="flex items-center gap-2 ml-2 flex-wrap">
+                {calibrationUnit === "ft" ? (
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      className="border px-2 py-1 rounded w-16 text-black bg-white"
+                      placeholder="ft"
+                      value={calibrationFeet}
+                      onChange={e => setCalibrationFeet(e.target.value)}
+                      style={{ color: "#000", background: "#fff" }}
+                    />
+                    <span className="text-sm text-muted-foreground">ft</span>
+                    <input
+                      type="number"
+                      className="border px-2 py-1 rounded w-16 text-black bg-white"
+                      placeholder="in"
+                      value={calibrationInches}
+                      onChange={e => setCalibrationInches(e.target.value)}
+                      style={{ color: "#000", background: "#fff" }}
+                    />
+                    <span className="text-sm text-muted-foreground">in</span>
+                  </div>
+                ) : (
+                  <input
+                    type="number"
+                    className="border px-2 py-1 rounded w-20 text-black bg-white"
+                    placeholder="Length"
+                    value={calibrationInput}
+                    onChange={e => setCalibrationInput(e.target.value)}
+                    style={{ color: "#000", background: "#fff" }}
+                  />
+                )}
                 <select
                   className="border px-1 py-1 rounded text-black bg-white"
                   value={calibrationUnit}
@@ -830,7 +971,7 @@ const BlueprintView = () => {
                   <option value="m">m</option>
                   <option value="cm">cm</option>
                 </select>
-                <Button size="sm" onClick={handleCalibrationSave} disabled={currentPoints.length !== 4 || !calibrationInput}>
+                <Button size="sm" onClick={handleCalibrationSave} disabled={currentPoints.length !== 4 || getCalibrationRealFeet() === null}>
                   Set Scale
                 </Button>
                 <Button size="sm" variant="ghost" onClick={cancelDrawing}>
