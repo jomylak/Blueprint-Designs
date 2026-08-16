@@ -79,19 +79,25 @@ const BlueprintView = () => {
   // off, rather than fighting the mouse for pixel-perfect precision.
   const [edgeLengthEdit, setEdgeLengthEdit] = useState<{ edgeIndex: number; value: string } | null>(null);
 
-  // Track viewport size on mount and window resize (the viewport itself no longer scrolls
-  // natively - content is positioned via the `pan` offset instead, see below).
+  // Track container size (the viewport itself no longer scrolls natively - content is
+  // positioned via the `pan` offset instead, see below). Uses a ResizeObserver rather than
+  // just a window-resize listener specifically because this component stays mounted while its
+  // tab is hidden (Index.tsx renders all tabs with forceMount) - opening a project from the
+  // Projects tab measures a display:none container (clientWidth/Height = 0) if we only ever
+  // measure once on mount. ResizeObserver re-fires when the element's actual box size changes,
+  // including the 0x0 -> real-size jump that happens when switching back to this tab.
   useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
     const updateDimensions = () => {
-      if (containerRef.current) {
-        setContainerWidth(containerRef.current.clientWidth);
-        setContainerHeight(containerRef.current.clientHeight);
-      }
+      setContainerWidth(el.clientWidth);
+      setContainerHeight(el.clientHeight);
     };
-    window.addEventListener("resize", updateDimensions);
     updateDimensions();
-    return () => window.removeEventListener("resize", updateDimensions);
-  }, []); // <-- Only run once on mount
+    const observer = new ResizeObserver(updateDimensions);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   // Only reset page when a new PDF is loaded (do not reset on tab switch)
   useEffect(() => {
