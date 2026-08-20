@@ -260,6 +260,72 @@ export function computeEdgeLabels(
   return specs;
 }
 
+function orientation(ax: number, ay: number, bx: number, by: number, cx: number, cy: number): number {
+  const val = (by - ay) * (cx - bx) - (bx - ax) * (cy - by);
+  if (Math.abs(val) < 1e-12) return 0;
+  return val > 0 ? 1 : 2;
+}
+
+function onSegment(ax: number, ay: number, bx: number, by: number, px: number, py: number): boolean {
+  return (
+    px <= Math.max(ax, bx) + 1e-9 && px >= Math.min(ax, bx) - 1e-9 &&
+    py <= Math.max(ay, by) + 1e-9 && py >= Math.min(ay, by) - 1e-9
+  );
+}
+
+function segmentsIntersect(
+  ax: number, ay: number, bx: number, by: number,
+  cx: number, cy: number, dx: number, dy: number
+): boolean {
+  const o1 = orientation(ax, ay, bx, by, cx, cy);
+  const o2 = orientation(ax, ay, bx, by, dx, dy);
+  const o3 = orientation(cx, cy, dx, dy, ax, ay);
+  const o4 = orientation(cx, cy, dx, dy, bx, by);
+
+  if (o1 !== o2 && o3 !== o4) return true;
+  if (o1 === 0 && onSegment(ax, ay, bx, by, cx, cy)) return true;
+  if (o2 === 0 && onSegment(ax, ay, bx, by, dx, dy)) return true;
+  if (o3 === 0 && onSegment(cx, cy, dx, dy, ax, ay)) return true;
+  if (o4 === 0 && onSegment(cx, cy, dx, dy, bx, by)) return true;
+  return false;
+}
+
+const SHARED_ENDPOINT_EPS = 1e-6;
+function sameFractionPoint(x1: number, y1: number, x2: number, y2: number): boolean {
+  return Math.abs(x1 - x2) < SHARED_ENDPOINT_EPS && Math.abs(y1 - y2) < SHARED_ENDPOINT_EPS;
+}
+
+// Checks whether the candidate segment (x1,y1)-(x2,y2) crosses any edge of `points`
+// (fraction-of-page-width pairs, see BlueprintView.tsx) - an open polyline (the shape currently
+// being drawn) by default, or a closed polygon (an already-completed region) with
+// `opts.closed`. Edges that share an endpoint with the candidate segment - e.g. the edge the new
+// segment continues from, or (when checking a closing edge) the edge the polygon started from -
+// are skipped, since sharing a vertex by construction isn't a crossing. Used while drawing a
+// region to stop a segment from cutting back across the shape's own outline, or across another
+// region's outline.
+export function segmentCrossesPolyline(
+  points: number[],
+  x1: number, y1: number,
+  x2: number, y2: number,
+  opts: { closed?: boolean } = {}
+): boolean {
+  const n = points.length / 2;
+  const edgeCount = opts.closed ? n : n - 1;
+  for (let i = 0; i < edgeCount; i++) {
+    const j = (i + 1) % n;
+    const ax = points[i * 2], ay = points[i * 2 + 1];
+    const bx = points[j * 2], by = points[j * 2 + 1];
+    if (
+      sameFractionPoint(ax, ay, x1, y1) || sameFractionPoint(bx, by, x1, y1) ||
+      sameFractionPoint(ax, ay, x2, y2) || sameFractionPoint(bx, by, x2, y2)
+    ) {
+      continue;
+    }
+    if (segmentsIntersect(x1, y1, x2, y2, ax, ay, bx, by)) return true;
+  }
+  return false;
+}
+
 export interface RegionNameLabelSpec {
   x: number;
   y: number;

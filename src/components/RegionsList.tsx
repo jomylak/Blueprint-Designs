@@ -73,7 +73,7 @@ const RegionsList = ({
   }
 
   return (
-    <div className="space-y-3 max-h-[400px] overflow-y-auto">
+    <div className="space-y-3 flex-1 min-h-0 overflow-y-auto">
       {regions.map((region) => {
         const material = materials.find(m => m.id === region.materialId);
         const isEditing = editingRegionId === region.id;

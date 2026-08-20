@@ -1,4 +1,4 @@
-# Blueprint Designs
+# Markyn
 
 **[Live demo](https://blueprint-designs-alpha.vercel.app)**
 

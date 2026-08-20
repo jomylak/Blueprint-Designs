@@ -1,7 +1,15 @@
 import { useProject } from "@/context/ProjectContext";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
-import { FileIcon, FolderIcon, Upload, CloudUpload, LogIn, LogOut } from "lucide-react";
+import {
+  FolderOpen,
+  Upload,
+  FilePlus2,
+  CloudUpload,
+  LogIn,
+  LogOut,
+  Pencil,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -80,33 +88,16 @@ const Header = () => {
   };
 
   return (
-    <header className="bg-card border-b border-border">
+    <header className="bg-background border-b border-border">
       <div className="container mx-auto py-3 px-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 bg-primary rounded-md flex items-center justify-center">
-            <span className="text-white font-bold text-sm">BD</span>
+            <Pencil className="h-4 w-4 text-primary-foreground" />
           </div>
-          <h1 className="text-lg font-semibold">Blueprint Designs</h1>
+          <h1 className="text-lg font-semibold">Markyn</h1>
         </div>
 
-        <div className="flex gap-2">
-          <Button
-            variant="default"
-            size="sm"
-            onClick={() => document.getElementById('pdf-upload')?.click()}
-            className="flex items-center gap-1"
-          >
-            <Upload className="h-4 w-4" />
-            <span>New Blueprint</span>
-          </Button>
-          <input
-            id="pdf-upload"
-            type="file"
-            accept=".pdf"
-            onChange={handleFileUpload}
-            className="hidden"
-          />
-
+        <div className="flex items-center gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -114,8 +105,8 @@ const Header = () => {
             className="flex items-center gap-1"
             disabled={!projectName}
           >
-            <FolderIcon className="h-4 w-4" />
-            <span>Save Project</span>
+            <FolderOpen className="h-4 w-4" />
+            <span>Save project</span>
           </Button>
           <Button
             variant="outline"
@@ -123,8 +114,8 @@ const Header = () => {
             onClick={handleImportClick}
             className="flex items-center gap-1"
           >
-            <FileIcon className="h-4 w-4" />
-            <span>Import Project</span>
+            <Upload className="h-4 w-4" />
+            <span>Import</span>
           </Button>
           <input
             ref={fileInputRef}
@@ -142,8 +133,25 @@ const Header = () => {
             disabled={!projectName || saveToCloudMutation.isPending}
           >
             <CloudUpload className="h-4 w-4" />
-            <span>{saveToCloudMutation.isPending ? "Saving..." : "Save to Cloud"}</span>
+            <span>{saveToCloudMutation.isPending ? "Saving..." : "Save to cloud"}</span>
           </Button>
+
+          <Button
+            variant="default"
+            size="sm"
+            onClick={() => document.getElementById('pdf-upload')?.click()}
+            className="flex items-center gap-1"
+          >
+            <FilePlus2 className="h-4 w-4" />
+            <span>New blueprint</span>
+          </Button>
+          <input
+            id="pdf-upload"
+            type="file"
+            accept=".pdf"
+            onChange={handleFileUpload}
+            className="hidden"
+          />
 
           {user ? (
             <Button
@@ -164,7 +172,7 @@ const Header = () => {
               className="flex items-center gap-1"
             >
               <LogIn className="h-4 w-4" />
-              <span>Sign In</span>
+              <span>Sign in</span>
             </Button>
           )}
         </div>

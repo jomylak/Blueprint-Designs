@@ -19,6 +19,7 @@ import {
   computeRegionNameLabel,
   displayUnitToFeet,
   feetToDisplayUnit,
+  segmentCrossesPolyline,
 } from "@/lib/utils";
 
 pdfjs.GlobalWorkerOptions.workerSrc = `${import.meta.env.BASE_URL}pdf.worker.mjs`;
@@ -31,6 +32,9 @@ enum DrawingMode {
 
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 10;
+// Screen-pixel radius (roughly zoom-independent - see handleSvgMouseMove) within which hovering
+// near the shape's start point snaps/closes it instead of placing a new point there.
+const SNAP_RADIUS_PX = 6;
 
 const BlueprintView = () => {
   const {
@@ -302,18 +306,45 @@ const BlueprintView = () => {
     if (drawingMode !== DrawingMode.Drawing) return;
     // Region drawing mode
     const svg = e.currentTarget;
-    if (!svg) return;
-    setCurrentPoints(prevPoints => {
-      if (typeof svg.createSVGPoint !== "function") return prevPoints;
-      const pt = svg.createSVGPoint();
-      pt.x = e.clientX;
-      pt.y = e.clientY;
-      const ctm = svg.getScreenCTM();
-      if (!ctm) return prevPoints;
-      const cursorpt = pt.matrixTransform(ctm.inverse());
-      // See note above: fraction-of-width so regions don't drift with zoom or window size.
-      return [...prevPoints, cursorpt.x / renderedWidth, cursorpt.y / renderedWidth];
-    });
+    if (!svg || typeof svg.createSVGPoint !== "function") return;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return;
+    const cursorpt = pt.matrixTransform(ctm.inverse());
+    // See note above: fraction-of-width so regions don't drift with zoom or window size.
+    const clickX = cursorpt.x / renderedWidth;
+    const clickY = cursorpt.y / renderedWidth;
+
+    if (currentPoints.length >= 6) {
+      const dxPx = (clickX - currentPoints[0]) * renderedWidth;
+      const dyPx = (clickY - currentPoints[1]) * renderedWidth;
+      if (Math.sqrt(dxPx * dxPx + dyPx * dyPx) <= SNAP_RADIUS_PX) {
+        // Hovering/clicking right on the start point closes the shape instead of adding a
+        // (near-duplicate) point there. completeRegionDrawing() itself checks whether the
+        // closing edge would cross another edge of the same shape.
+        completeRegionDrawing();
+        return;
+      }
+
+    }
+
+    if (currentPoints.length >= 2) {
+      const lastX = currentPoints[currentPoints.length - 2];
+      const lastY = currentPoints[currentPoints.length - 1];
+      const crossing = findCrossing(lastX, lastY, clickX, clickY);
+      if (crossing === "self") {
+        toast.error("That line crosses this shape's own edge");
+        return;
+      }
+      if (crossing === "region") {
+        toast.error("That line crosses into another region");
+        return;
+      }
+    }
+
+    setCurrentPoints(prev => [...prev, clickX, clickY]);
   };
 
   // Complete region drawing
@@ -321,6 +352,17 @@ const BlueprintView = () => {
     if (drawingMode === DrawingMode.Scaling) return; // Don't allow in calibration mode
     if (currentPoints.length < 6) {
       toast.error("Please draw at least 3 points to create a region");
+      return;
+    }
+    const firstX = currentPoints[0], firstY = currentPoints[1];
+    const lastX = currentPoints[currentPoints.length - 2], lastY = currentPoints[currentPoints.length - 1];
+    const closingCrossing = findCrossing(lastX, lastY, firstX, firstY);
+    if (closingCrossing === "self") {
+      toast.error("Can't close the shape - the closing edge crosses another edge");
+      return;
+    }
+    if (closingCrossing === "region") {
+      toast.error("Can't close the shape - the closing edge crosses into another region");
       return;
     }
     // Calculate area in square pixels
@@ -423,6 +465,20 @@ const BlueprintView = () => {
   };
 
   const pageRegions = regions.filter(r => r.pageNumber === currentPage);
+
+  // Checks segment (x1,y1)-(x2,y2) against the shape currently being drawn (self-intersection,
+  // once it has at least 3 placed points) and against every other region already on this page
+  // (closed polygons) - used to block/flag a line that would cut back across its own shape or
+  // straight through an unrelated region while drawing.
+  const findCrossing = (x1: number, y1: number, x2: number, y2: number): "self" | "region" | null => {
+    if (currentPoints.length >= 6 && segmentCrossesPolyline(currentPoints, x1, y1, x2, y2)) {
+      return "self";
+    }
+    if (pageRegions.some(region => segmentCrossesPolyline(region.points, x1, y1, x2, y2, { closed: true }))) {
+      return "region";
+    }
+    return null;
+  };
 
   // Fix: setPageCount only when numPages is available, and don't reset pageCount to 0 in context
   // Fix: Memoize handleLoadSuccess with useCallback and use correct renderMode
@@ -759,8 +815,29 @@ const BlueprintView = () => {
   ), [pageRegions, renderedWidth, selectedRegionId, editingRegionId, editingPoints, scale, scaleUnit]);
 
   // Memoize current drawing polyline and points
-  const renderedDrawing = useMemo(() => (
-    drawingMode === DrawingMode.Drawing && currentPoints.length > 0 ? (
+  const renderedDrawing = useMemo(() => {
+    if (drawingMode !== DrawingMode.Drawing || currentPoints.length === 0) return null;
+
+    const lastX = currentPoints[currentPoints.length - 2];
+    const lastY = currentPoints[currentPoints.length - 1];
+    const canClose = currentPoints.length >= 6;
+    let snappedToStart = false;
+    if (canClose && mousePos) {
+      const dxPx = (mousePos.x - currentPoints[0]) * renderedWidth;
+      const dyPx = (mousePos.y - currentPoints[1]) * renderedWidth;
+      snappedToStart = Math.sqrt(dxPx * dxPx + dyPx * dyPx) <= SNAP_RADIUS_PX;
+    }
+    // While hovering the start point, the rubber-band line latches onto it exactly rather than
+    // following the raw cursor - the visual cue that clicking now will close the shape.
+    const rubberEndX = snappedToStart ? currentPoints[0] : mousePos?.x;
+    const rubberEndY = snappedToStart ? currentPoints[1] : mousePos?.y;
+    const rubberCrosses = !!(
+      currentPoints.length >= 2 && mousePos && rubberEndX !== undefined && rubberEndY !== undefined &&
+      findCrossing(lastX, lastY, rubberEndX, rubberEndY)
+    );
+    const rubberColor = rubberCrosses ? "#ef4444" : "#3b82f6";
+
+    return (
       <>
         <polyline
           // Thinner, more transparent line for accuracy
@@ -775,17 +852,32 @@ const BlueprintView = () => {
           strokeDasharray="3,3"
           opacity={0.7}
         />
-        {/* Rubber-band line from the last placed point to the cursor, to help line up the next click */}
-        {mousePos && (
+        {/* Rubber-band line from the last placed point to the cursor (or the snapped start
+            point), to help line up the next click. Turns red if it would cross another edge
+            of this same shape. */}
+        {mousePos && rubberEndX !== undefined && rubberEndY !== undefined && (
           <line
-            x1={currentPoints[currentPoints.length - 2] * renderedWidth}
-            y1={currentPoints[currentPoints.length - 1] * renderedWidth}
-            x2={mousePos.x * renderedWidth}
-            y2={mousePos.y * renderedWidth}
-            stroke="#3b82f6"
-            strokeWidth={1}
+            x1={lastX * renderedWidth}
+            y1={lastY * renderedWidth}
+            x2={rubberEndX * renderedWidth}
+            y2={rubberEndY * renderedWidth}
+            stroke={rubberColor}
+            strokeWidth={rubberCrosses ? 1.5 : 1}
             strokeDasharray="3,3"
-            opacity={0.5}
+            opacity={rubberCrosses ? 0.9 : 0.5}
+          />
+        )}
+        {/* Snap-to-close indicator: a dashed ring around the start point while hovering close
+            enough to it to latch on and close the shape on click. */}
+        {snappedToStart && (
+          <circle
+            cx={currentPoints[0] * renderedWidth}
+            cy={currentPoints[1] * renderedWidth}
+            r={SNAP_RADIUS_PX}
+            fill="none"
+            stroke={rubberCrosses ? "#ef4444" : "#3b82f6"}
+            strokeWidth={1.5}
+            strokeDasharray="2,2"
           />
         )}
         {Array.from({ length: currentPoints.length / 2 }).map((_, i) => (
@@ -816,8 +908,8 @@ const BlueprintView = () => {
           </g>
         ))}
       </>
-    ) : null
-  ), [drawingMode, currentPoints, renderedWidth, mousePos, scale, scaleUnit]);
+    );
+  }, [drawingMode, currentPoints, renderedWidth, mousePos, scale, scaleUnit, pageRegions]);
 
   // Memoize calibration line/points for overlay
   const renderedCalibration = useMemo(() => (
@@ -1032,7 +1124,7 @@ const BlueprintView = () => {
         </div>
       )}
       {/* PDF and Drawing Overlay */}
-      <div className="flex flex-col md:flex-row gap-4 items-start">
+      <div className="flex flex-col md:flex-row gap-4 items-stretch">
         <Card className="flex-1 min-w-0 w-full">
           <CardContent className="p-4">
             <div
@@ -1149,16 +1241,24 @@ const BlueprintView = () => {
         </Card>
         <Card className="w-full md:w-72 shrink-0">
           <CardContent className="p-4">
-            <h3 className="font-medium mb-3">Regions on Page {currentPage}</h3>
-            <RegionsList
-              regions={pageRegions}
-              selectedId={selectedRegionId}
-              onSelect={setSelectedRegionId}
-              onDelete={handleDeleteRegion}
-              editingRegionId={editingRegionId}
-              onSaveEdit={handleSaveEditedRegion}
-              onCancelEdit={handleCancelEdit}
-            />
+            {/* Same explicit height as the PDF viewer's container div (above) so both
+                cards end up the same total height, with the list scrolling internally
+                instead of growing past the viewer. */}
+            <div
+              className="flex flex-col"
+              style={{ minHeight: 400, height: "calc(100vh - 220px)" }}
+            >
+              <h3 className="font-medium mb-3 shrink-0">Regions on Page {currentPage}</h3>
+              <RegionsList
+                regions={pageRegions}
+                selectedId={selectedRegionId}
+                onSelect={setSelectedRegionId}
+                onDelete={handleDeleteRegion}
+                editingRegionId={editingRegionId}
+                onSaveEdit={handleSaveEditedRegion}
+                onCancelEdit={handleCancelEdit}
+              />
+            </div>
           </CardContent>
         </Card>
       </div>

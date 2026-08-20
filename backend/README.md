@@ -1,4 +1,4 @@
-# Blueprint Designs - Cloud Sync API
+# Markyn - Cloud Sync API
 
 Flask REST API backing the optional cloud-save feature. Stores projects in Postgres (hosted on
 Supabase) and authenticates requests via Supabase-issued JWTs, verified against Supabase's public
