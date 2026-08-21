@@ -1,6 +1,6 @@
 # Markyn
 
-**[Live demo](markyn.vercel.app)**
+**[Live demo](https://markyn.vercel.app)**
 
 A desktop tool for taking off material quantities from blueprint PDFs and generating cost estimates.
 
